@@ -160,6 +160,13 @@ properties:
   pvdd-supply:
     description: Power supply of the amplifier output stage.
 
+  firmware-name:
+    maxItems: 1
+    description:
+      Name of the RCA firmware file holding the device configuration
+      profiles, for boards that need a board specific file. If absent,
+      the name is derived from sound-name-prefix and the device name.
+
   interrupts:
     maxItems: 1
 
