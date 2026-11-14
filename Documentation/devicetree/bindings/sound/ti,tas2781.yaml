@@ -282,7 +282,7 @@ allOf:
             minimum: 0x60
             maximum: 0x65
 
-additionalProperties: false
+unevaluatedProperties: false
 
 examples:
   - |
