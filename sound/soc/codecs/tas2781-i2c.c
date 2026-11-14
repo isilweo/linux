@@ -24,6 +24,7 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
+#include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
@@ -2210,6 +2211,9 @@ static void tasdevice_parse_dt(struct tasdevice_priv *tas_priv)
 	tas_priv->ndev = ndev;
 	for (i = 0; i < ndev; i++)
 		tas_priv->tasdevice[i].dev_addr = dev_addrs[i];
+
+	device_property_read_string(&client->dev, "firmware-name",
+		&tas_priv->rca_fw_name);
 
 	tas_priv->reset = devm_gpiod_get_optional(&client->dev,
 			"reset", GPIOD_OUT_HIGH);

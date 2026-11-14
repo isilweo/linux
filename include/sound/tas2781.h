@@ -219,6 +219,8 @@ struct tasdevice_priv {
 	unsigned char dev_name[32];
 	const unsigned char (*dvc_tlv_table)[4];
 	const char *name_prefix;
+	/* RCA firmware name, from firmware-name or derived into rca_binaryname */
+	const char *rca_fw_name;
 	unsigned char ndev;
 	unsigned int dspbin_typ;
 	unsigned int magic_num;

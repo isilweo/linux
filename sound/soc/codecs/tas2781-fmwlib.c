@@ -317,7 +317,8 @@ int tasdevice_rca_parser(void *context, const struct firmware *fmw)
 	fw_hdr = &(rca->fw_hdr);
 	if (!fmw || !fmw->data) {
 		dev_err(tas_priv->dev, "Failed to read %s\n",
-			tas_priv->rca_binaryname);
+			tas_priv->rca_fw_name ?:
+			(const char *)tas_priv->rca_binaryname);
 		tas_priv->fw_state = TASDEVICE_DSP_FW_FAIL;
 		ret = -EINVAL;
 		goto out;
