@@ -25,6 +25,7 @@
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/regmap.h>
+#include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
@@ -2208,6 +2209,14 @@ static int tasdevice_i2c_probe(struct i2c_client *i2c)
 
 	tas_priv->chip_id = (uintptr_t)id_data->driver_data;
 	strscpy(tas_priv->dev_name, id_data->name, sizeof(tas_priv->dev_name));
+
+	/*
+	 * The output stage supply must be up before the device leaves reset,
+	 * which happens as soon as the reset GPIO is requested below.
+	 */
+	ret = devm_regulator_get_enable_optional(&i2c->dev, "pvdd");
+	if (ret && ret != -ENODEV)
+		return dev_err_probe(&i2c->dev, ret, "Failed to enable pvdd\n");
 
 	tasdevice_parse_dt(tas_priv);
 
