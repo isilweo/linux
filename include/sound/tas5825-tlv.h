@@ -13,6 +13,9 @@
 #ifndef __TAS5825_TLV_H__
 #define __TAS5825_TLV_H__
 
+/* TAS5782M uses the same 0.5 dB, 8-bit digital volume scale */
+#define TAS5782M_DVC_LEVEL		TASDEVICE_REG(0x0, 0x0, 0x3d)
+
 #define TAS5825_DVC_LEVEL		TASDEVICE_REG(0x0, 0x0, 0x4c)
 #define TAS5825_AMP_LEVEL		TASDEVICE_REG(0x0, 0x0, 0x54)
 

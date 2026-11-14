@@ -321,7 +321,7 @@ void tasdevice_reset(struct tasdevice_priv *tas_dev)
 		for (i = 0; i < tas_dev->ndev; i++) {
 			ret = tasdevice_dev_write(tas_dev, i,
 				TASDEVICE_REG_SWRESET,
-				tas_dev->chip_id >= TAS5802 ?
+				tas_dev->chip_id >= TAS5782M ?
 				TAS5825_REG_SWRESET_RESET :
 				TASDEVICE_REG_SWRESET_RESET);
 			if (ret < 0)

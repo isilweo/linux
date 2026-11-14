@@ -113,6 +113,7 @@ static const struct i2c_device_id tasdevice_id[] = {
 	{ .name = "tas2573", .driver_data = TAS2573 },
 	{ .name = "tas2574", .driver_data = TAS2574 },
 	{ .name = "tas2781", .driver_data = TAS2781 },
+	{ .name = "tas5782m", .driver_data = TAS5782M },
 	{ .name = "tas5802", .driver_data = TAS5802 },
 	{ .name = "tas5806m", .driver_data = TAS5806M },
 	{ .name = "tas5806md", .driver_data = TAS5806MD },
@@ -138,6 +139,7 @@ static const struct of_device_id tasdevice_of_match[] = {
 	{ .compatible = "ti,tas2573", .data = &tasdevice_id[TAS2573] },
 	{ .compatible = "ti,tas2574", .data = &tasdevice_id[TAS2574] },
 	{ .compatible = "ti,tas2781", .data = &tasdevice_id[TAS2781] },
+	{ .compatible = "ti,tas5782m", .data = &tasdevice_id[TAS5782M] },
 	{ .compatible = "ti,tas5802", .data = &tasdevice_id[TAS5802] },
 	{ .compatible = "ti,tas5806m", .data = &tasdevice_id[TAS5806M] },
 	{ .compatible = "ti,tas5806md", .data = &tasdevice_id[TAS5806MD] },
@@ -957,6 +959,12 @@ static const struct snd_kcontrol_new tas2781_snd_controls[] = {
 	SOC_SINGLE_RANGE_EXT_TLV("Speaker Digital Volume", TAS2781_DVC_LVL,
 		0, 0, 200, 1, tas2781_digital_getvol,
 		tas2781_digital_putvol, tas2781_dvc_tlv),
+};
+
+static const struct snd_kcontrol_new tas5782m_snd_controls[] = {
+	SOC_SINGLE_RANGE_EXT_TLV("Speaker Digital Volume", TAS5782M_DVC_LEVEL,
+		0, 0, 254, 1, tas2781_amp_getvol,
+		tas2781_amp_putvol, tas5825_dvc_tlv),
 };
 
 static const struct snd_kcontrol_new tas5825_snd_controls[] = {
@@ -1787,7 +1795,12 @@ static void tasdevice_fw_ready(const struct firmware *fmw,
 	 * failing to load DSP firmware is NOT an error.
 	 */
 	tas_priv->fw_state = TASDEVICE_RCA_FW_OK;
-	/* There is no DSP firmware required for TAS2118/2X20/257X. */
+	/*
+	 * There is no DSP firmware required for TAS2118/2X20/257X. The
+	 * TAS5782M DSP coefficients are part of its RCA init profile, which
+	 * needs running I2S clocks and is therefore applied on the first
+	 * power-up (see tasdevice_dapm_event()).
+	 */
 	switch (tas_priv->chip_id) {
 	case TAS2020:
 	case TAS2118:
@@ -1797,6 +1810,7 @@ static void tasdevice_fw_ready(const struct firmware *fmw,
 	case TAS2570:
 	case TAS2572:
 	case TAS2574:
+	case TAS5782M:
 		goto out;
 	}
 	if (tas_priv->name_prefix)
@@ -1906,6 +1920,26 @@ static int tasdevice_dapm_event(struct snd_soc_dapm_widget *w,
 	guard(mutex)(&tas_priv->codec_lock);
 	if (event == SND_SOC_DAPM_PRE_PMD)
 		state = 1;
+
+	/*
+	 * Writes to the TAS5782M coefficient RAM only take effect while the
+	 * I2S clocks are running and the DSP is out of standby; its control
+	 * registers have no such restriction. The init profile loads the DSP
+	 * coefficients, so it cannot be applied in tasdevice_fw_ready().
+	 * Apply it once, on the first power-up, when the clocks run. The
+	 * coefficients are kept in standby, so later streams only need the
+	 * regular profile.
+	 */
+	if (tas_priv->chip_id == TAS5782M && !state &&
+	    !tas_priv->init_profile_done &&
+	    tas_priv->fw_state == TASDEVICE_RCA_FW_OK &&
+	    tas_priv->rcabin.init_profile_id >= 0) {
+		tasdevice_select_cfg_blk(tas_priv,
+			tas_priv->rcabin.init_profile_id,
+			TASDEVICE_BIN_BLK_PRE_POWER_UP);
+		tas_priv->init_profile_done = true;
+	}
+
 	tasdevice_tuning_switch(tas_priv, state, false);
 
 	return 0;
@@ -2062,6 +2096,10 @@ static int tasdevice_codec_probe(struct snd_soc_component *codec)
 	case TAS2781:
 		p = (struct snd_kcontrol_new *)tas2781_snd_controls;
 		size = ARRAY_SIZE(tas2781_snd_controls);
+		break;
+	case TAS5782M:
+		p = (struct snd_kcontrol_new *)tas5782m_snd_controls;
+		size = ARRAY_SIZE(tas5782m_snd_controls);
 		break;
 	case TAS5802:
 	case TAS5806M:

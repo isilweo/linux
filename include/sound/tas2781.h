@@ -123,6 +123,7 @@ enum audio_device {
 	TAS2573,
 	TAS2574,
 	TAS2781,
+	TAS5782M,
 	TAS5802,
 	TAS5806M,
 	TAS5806MD,
@@ -234,6 +235,7 @@ struct tasdevice_priv {
 	void *codec;
 	bool force_fwload_status;
 	bool playback_started;
+	bool init_profile_done;
 	bool isacpi;
 	bool isspi;
 	unsigned int global_addr;
