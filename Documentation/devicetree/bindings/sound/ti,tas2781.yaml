@@ -24,6 +24,8 @@ description: |
   Instruments Smart Amp speaker protection algorithm. The
   integrated speaker voltage and current sense provides for real time
   monitoring of loudspeaker behavior.
+  The TAS5782M is a stereo, digital input Class-D audio amplifier with
+  an integrated DAC and a programmable audio DSP.
   The TAS5802/TAS5815/TAS5822/TAS5825/TAS5827/TAS5828 is a stereo,
   digital input Class-D audio amplifier optimized for efficiently driving
   high peak power into small loudspeakers. An integrated on-chip DSP
@@ -36,6 +38,7 @@ description: |
     https://www.ti.com/lit/gpn/tas2572
     https://www.ti.com/lit/gpn/tas2574
     https://www.ti.com/lit/gpn/tas2781
+    https://www.ti.com/lit/gpn/tas5782m
     https://www.ti.com/lit/gpn/tas5806m
     https://www.ti.com/lit/gpn/tas5806md
     https://www.ti.com/lit/gpn/tas5815
@@ -80,6 +83,9 @@ properties:
       ti,tas2781: 24-V Class-D Amplifier with Real Time Integrated Speaker
       Protection and Audio Processing, 16/20/24/32bit stereo I2S or
       multichannel TDM.
+
+      ti,tas5782m: 30-W Stereo, Digital Input Class-D Audio Amplifier with
+      96-kHz Processing.
 
       ti,tas5802: 22-W, Inductor-Less, Digital Input, Closed-Loop Class-D
       Audio Amplifier with 96-Khz Extended Processing and Low Idle Power
@@ -126,6 +132,7 @@ properties:
               - ti,tas2572
               - ti,tas2573
               - ti,tas2574
+              - ti,tas5782m
               - ti,tas5802
               - ti,tas5806m
               - ti,tas5806md
@@ -150,6 +157,9 @@ properties:
   reset-gpios:
     maxItems: 1
 
+  pvdd-supply:
+    description: Power supply of the amplifier output stage.
+
   interrupts:
     maxItems: 1
 
@@ -173,6 +183,7 @@ allOf:
               - ti,tas2320
               - ti,tas2568
               - ti,tas2574
+              - ti,tas5782m
     then:
       properties:
         reg:
