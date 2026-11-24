@@ -176,7 +176,7 @@ static int vfe_enable_output(struct vfe_line *line)
 	unsigned int i;
 	u16 ub_size;
 
-	ub_size = vfe->ops_gen1->get_ub_size(vfe->id);
+	ub_size = vfe->ops_gen1->get_ub_size(vfe);
 	if (!ub_size)
 		return -EINVAL;
 
