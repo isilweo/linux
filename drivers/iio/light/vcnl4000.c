@@ -2056,6 +2056,8 @@ static int vcnl4000_probe(struct i2c_client *client)
 	pm_runtime_enable(&client->dev);
 	pm_runtime_set_autosuspend_delay(&client->dev, VCNL4000_SLEEP_DELAY_MS);
 	pm_runtime_use_autosuspend(&client->dev);
+	pm_runtime_mark_last_busy(&client->dev);
+	pm_request_autosuspend(&client->dev);
 
 	return 0;
 fail_poweroff:
