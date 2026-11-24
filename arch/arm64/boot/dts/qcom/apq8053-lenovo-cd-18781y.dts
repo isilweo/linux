@@ -614,7 +614,7 @@
 	};
 
 	sensor_i2c_default: sensor-i2c-default-state {
-		pins = "gpio14", "gpio15";
+		pins = "gpio6", "gpio7";
 		function = "gpio";
 		drive-strength = <2>;
 		bias-disable;
