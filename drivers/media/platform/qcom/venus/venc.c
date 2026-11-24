@@ -1181,7 +1181,8 @@ static int venc_queue_setup(struct vb2_queue *q,
 		break;
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
 		*num_planes = inst->fmt_cap->num_planes;
-		*num_buffers = max(*num_buffers, min);
+		/* buffers added after REQBUFS are rejected; allocate headroom */
+		*num_buffers = max(*num_buffers, 2 * min);
 		inst->num_output_bufs = *num_buffers;
 		sizes[0] = venus_helper_get_framesz(inst->fmt_cap->pixfmt,
 						    inst->width,
