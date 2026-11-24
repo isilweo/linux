@@ -104,19 +104,25 @@
 			reg = <0x51>;
 
 			interrupt-parent = <&tlmm>;
-			interrupts = <43 IRQ_TYPE_EDGE_RISING>;
+			interrupts = <43 IRQ_TYPE_EDGE_FALLING>;
 			interrupt-names = "INT1";
+
+			vdd-supply = <&pm8953_l10>;
+			vddio-supply = <&pm8953_l6>;
 
 			pinctrl-0 = <&alsp_int_default>;
 			pinctrl-names = "default";
 
 			/*
-			 * WARNING: Do not enable for now!
-			 * There's a chance that this can burn out the sensor's IR LED.
-			 * The sensor turns on the IR LED at high power (so that it
-			 * gets noticeably warm) and never turns it off.
+			 * Safe to enable together with the vcnl4000 driver change that
+			 * programs the VCNL4200 IR LED like the stock Lenovo firmware
+			 * (2 pulses of 75 mA, PS_IT 8T, duty 1/1280) instead of 8 pulses
+			 * of 120 mA, which made the LED run hot.
+			 * Level 2 = 32 counts (the driver divides by 16). Background with
+			 * a clean window is 0-3, but up to ~60 under incandescent lamps,
+			 * so userspace may want a higher threshold.
 			 */
-			status = "disabled";
+			proximity-near-level = <2>;
 		};
 	};
 
