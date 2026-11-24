@@ -385,8 +385,15 @@ u32 hfi_parser(struct venus_core *core, struct venus_inst *inst, void *buf,
 			break;
 		}
 
-		if (ret < 0 || rem_bytes < ret)
+		if (ret < 0)
 			return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
+
+		/* VE.4.2 firmware on MSM8953 truncates the last property */
+		if (rem_bytes < ret) {
+			dev_warn_once(core->dev, "Truncated property %x, ignoring the rest\n",
+				      property);
+			break;
+		}
 
 		words += ret / sizeof(u32);
 		rem_bytes -= ret;
