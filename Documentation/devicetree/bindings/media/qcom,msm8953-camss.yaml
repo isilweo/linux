@@ -170,9 +170,10 @@ properties:
 
   reg:
     minItems: 13
-    maxItems: 13
+    maxItems: 15
 
   reg-names:
+    minItems: 13
     items:
       - const: csi_clk_mux
       - const: csid0
@@ -187,6 +188,8 @@ properties:
       - const: ispif
       - const: vfe0
       - const: vfe1
+      - const: vfe0_vbif
+      - const: vfe1_vbif
 
   vdda-supply:
     description:
