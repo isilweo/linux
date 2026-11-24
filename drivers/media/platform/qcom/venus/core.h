@@ -454,6 +454,8 @@ enum venus_inst_modes {
  * @bit_depth:		current bitstream bit-depth
  * @pic_struct:		bitstream progressive vs interlaced
  * @next_buf_last: a flag to mark next queued capture buffer as last
+ * @eos_last_pending: the firmware ended the drain in a capture buffer the
+ *		driver does not hold; the next queued one must carry LAST
  * @drain_active:	Drain sequence is in progress
  * @flags:	bitmask flags describing current instance mode
  * @dpb_ids:	DPB buffer ID's
@@ -525,6 +527,7 @@ struct venus_inst {
 	unsigned int bit_depth;
 	unsigned int pic_struct;
 	bool next_buf_last;
+	atomic_t eos_last_pending;
 	bool drain_active;
 	enum venus_inst_modes flags;
 	struct ida dpb_ids;
