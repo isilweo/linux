@@ -28,7 +28,7 @@ struct vfe_hw_ops_gen1 {
 				   u8 enable);
 	void (*enable_irq_pix_line)(struct vfe_device *vfe, u8 comp, enum vfe_line_id line_id,
 				    u8 enable);
-	u16 (*get_ub_size)(u8 vfe_id);
+	u16 (*get_ub_size)(struct vfe_device *vfe);
 	void (*halt_clear)(struct vfe_device *vfe);
 	void (*halt_request)(struct vfe_device *vfe);
 	void (*set_camif_cfg)(struct vfe_device *vfe, struct vfe_line *line);

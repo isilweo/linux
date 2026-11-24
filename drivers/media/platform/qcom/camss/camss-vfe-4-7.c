@@ -252,11 +252,11 @@
 #define MSM_VFE_VFE1_UB_SIZE 1535
 #define MSM_VFE_VFE1_UB_SIZE_RDI (MSM_VFE_VFE1_UB_SIZE / 3)
 
-static u16 vfe_get_ub_size(u8 vfe_id)
+static u16 vfe_get_ub_size(struct vfe_device *vfe)
 {
-	if (vfe_id == 0)
+	if (vfe->id == 0)
 		return MSM_VFE_VFE0_UB_SIZE_RDI;
-	else if (vfe_id == 1)
+	else if (vfe->id == 1)
 		return MSM_VFE_VFE1_UB_SIZE_RDI;
 
 	return 0;
