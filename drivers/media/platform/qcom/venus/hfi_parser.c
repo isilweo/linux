@@ -131,22 +131,48 @@ fill_caps(struct hfi_plat_caps *cap, const void *data, unsigned int num)
 }
 
 static int
-parse_caps(struct venus_core *core, u32 codecs, u32 domain, void *data)
+parse_caps(struct venus_core *core, u32 codecs, u32 domain, void *data,
+	   u32 rem_bytes, bool sys_init)
 {
 	struct hfi_capabilities *caps = data;
 	struct hfi_capability *cap = caps->data;
-	u32 num_caps = caps->num_capabilities;
 	struct hfi_capability caps_arr[MAX_CAP_ENTRIES] = {};
+	u32 num_caps;
+	size_t size;
 
+	if (rem_bytes < sizeof(*caps))
+		return -EOVERFLOW;
+
+	num_caps = caps->num_capabilities;
 	if (num_caps > MAX_CAP_ENTRIES)
 		return -EINVAL;
+
+	size = struct_size(caps, data, num_caps);
+
+	/*
+	 * The VIDEO.VE.4.2 firmware on MSM8953 (HFI 3xx) ends SYS_INIT_DONE
+	 * with this property and cuts the packet 8 bytes into its last
+	 * capability entry. Drop that entry and consume the rest of the
+	 * packet. Any other short property is still an error.
+	 */
+	if (size > rem_bytes) {
+		if (!sys_init || !IS_V3(core) ||
+		    size - rem_bytes != sizeof(*cap) / 2)
+			return -EOVERFLOW;
+
+		dev_info_once(core->dev,
+			      "firmware cut the last capability (type %#x), dropping it\n",
+			      cap[num_caps - 1].capability_type);
+		num_caps--;
+		size = rem_bytes;
+	}
 
 	memcpy(caps_arr, cap, num_caps * sizeof(*cap));
 
 	for_each_codec(core->caps, ARRAY_SIZE(core->caps), codecs, domain,
 		       fill_caps, caps_arr, num_caps);
 
-	return sizeof(*caps) + sizeof(*cap) * num_caps;
+	return size;
 }
 
 static void fill_raw_fmts(struct hfi_plat_caps *cap, const void *fmts,
@@ -356,10 +382,8 @@ u32 hfi_parser(struct venus_core *core, struct venus_inst *inst, void *buf,
 			ret = parse_raw_formats(core, codecs, domain, payload, rem_bytes);
 			break;
 		case HFI_PROPERTY_PARAM_CAPABILITY_SUPPORTED:
-			if (rem_bytes < sizeof(struct hfi_capabilities))
-				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
-
-			ret = parse_caps(core, codecs, domain, payload);
+			ret = parse_caps(core, codecs, domain, payload,
+					 rem_bytes, !inst);
 			break;
 		case HFI_PROPERTY_PARAM_PROFILE_LEVEL_SUPPORTED:
 			if (rem_bytes < sizeof(struct hfi_profile_level_supported))
