@@ -473,6 +473,7 @@ static int venc_enum_frameintervals(struct file *file, void *fh,
 	struct venus_inst *inst = to_inst(file);
 	const struct venus_format *fmt;
 	unsigned int framerate_factor = 1;
+	u32 fmin, fmax;
 
 	fival->type = V4L2_FRMIVAL_TYPE_STEPWISE;
 
@@ -502,12 +503,20 @@ static int venc_enum_frameintervals(struct file *file, void *fh,
 		framerate_factor = (1 << 16);
 	}
 
+	/* some firmware reports no frame rate range for the encoder */
+	fmin = frate_min(inst) / framerate_factor;
+	fmax = frate_max(inst) / framerate_factor;
+	if (!fmin || !fmax) {
+		fmin = 1;
+		fmax = 120;
+	}
+
 	fival->stepwise.min.numerator = 1;
-	fival->stepwise.min.denominator = frate_max(inst) / framerate_factor;
+	fival->stepwise.min.denominator = fmax;
 	fival->stepwise.max.numerator = 1;
-	fival->stepwise.max.denominator = frate_min(inst) / framerate_factor;
+	fival->stepwise.max.denominator = fmin;
 	fival->stepwise.step.numerator = 1;
-	fival->stepwise.step.denominator = frate_max(inst) / framerate_factor;
+	fival->stepwise.step.denominator = fmax;
 
 	return 0;
 }
