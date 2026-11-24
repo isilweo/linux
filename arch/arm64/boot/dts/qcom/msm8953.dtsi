@@ -1761,7 +1761,9 @@
 			      <0x1b00040 0x4>,
 			      <0x1b31000 0x500>,
 			      <0x1b10000 0x1000>,
-			      <0x1b14000 0x1000>;
+			      <0x1b14000 0x1000>,
+			      <0x1b40000 0x200>,
+			      <0x1ba0000 0x200>;
 			reg-names = "csi_clk_mux",
 				    "csid0",
 				    "csid1",
@@ -1774,7 +1776,9 @@
 				    "csiphy2_clk_mux",
 				    "ispif",
 				    "vfe0",
-				    "vfe1";
+				    "vfe1",
+				    "vfe0_vbif",
+				    "vfe1_vbif";
 
 			clocks = <&gcc GCC_CAMSS_AHB_CLK>,
 				 <&gcc GCC_CAMSS_CSI0_CLK>,
