@@ -123,6 +123,13 @@
 	(FIELD_PREP(VCNL4040_PS_CONF3_MPS, VCNL4040_CONF3_PS_MPS_16BITS) | \
 	 FIELD_PREP(VCNL4040_PS_MS_LED_I, VCNL4040_CONF3_PS_LED_I_16BITS))
 
+/* VCNL4200 low-power IR LED settings, as used by the vendor ADSP driver */
+#define VCNL4200_PS_CONF1_PS_DUTY	GENMASK(7, 6)
+#define VCNL4200_PS_DUTY_1_1280		3
+#define VCNL4200_PS_IT_8T		4
+#define VCNL4200_PS_LED_I_75MA		1
+#define VCNL4200_PS_MPS_2		1
+
 static const char * const vcnl4000_supplies[] = { "vdd", "vddio" };
 
 static const int vcnl4010_prox_sampling_frequency[][2] = {
@@ -388,8 +395,8 @@ static int vcnl4200_init(struct vcnl4000_data *data)
 	case VCNL4200_PROD_ID:
 		/* Default wait time is 50ms, add 20% tolerance. */
 		data->vcnl4200_al.sampling_rate = ktime_set(0, 60000 * 1000);
-		/* Default wait time is 4.8ms, add 20% tolerance. */
-		data->vcnl4200_ps.sampling_rate = ktime_set(0, 5760 * 1000);
+		/* 4.8 ms x 8 (duty 1/1280) x 8 (PS_IT 8T), add 20% tolerance. */
+		data->vcnl4200_ps.sampling_rate = ktime_set(0, 368640 * 1000);
 		break;
 	case VCNL4040_PROD_ID:
 		/* Default wait time is 80ms, add 20% tolerance. */
@@ -409,6 +416,13 @@ static int vcnl4200_init(struct vcnl4000_data *data)
 		return ret;
 
 	regval = ret | VCNL4040_PS_CONF2_PS_HD;
+	if (id == VCNL4200_PROD_ID) {
+		regval &= ~VCNL4200_PS_CONF1_PS_DUTY;
+		regval &= ~VCNL4040_PS_CONF2_PS_IT;
+		regval |= FIELD_PREP(VCNL4200_PS_CONF1_PS_DUTY,
+				     VCNL4200_PS_DUTY_1_1280) |
+			  FIELD_PREP(VCNL4040_PS_CONF2_PS_IT, VCNL4200_PS_IT_8T);
+	}
 	ret = i2c_smbus_write_word_data(data->client, VCNL4200_PS_CONF1,
 					regval);
 	if (ret < 0)
@@ -419,7 +433,13 @@ static int vcnl4200_init(struct vcnl4000_data *data)
 	if (ret < 0)
 		return ret;
 
-	regval = ret | VCNL4040_CONF3_PS_SAMPLE_16BITS;
+	if (id == VCNL4200_PROD_ID) {
+		regval = ret & ~(VCNL4040_PS_CONF3_MPS | VCNL4040_PS_MS_LED_I);
+		regval |= FIELD_PREP(VCNL4040_PS_CONF3_MPS, VCNL4200_PS_MPS_2) |
+			  FIELD_PREP(VCNL4040_PS_MS_LED_I, VCNL4200_PS_LED_I_75MA);
+	} else {
+		regval = ret | VCNL4040_CONF3_PS_SAMPLE_16BITS;
+	}
 	ret = i2c_smbus_write_word_data(data->client, VCNL4200_PS_CONF3,
 					regval);
 	if (ret < 0)
