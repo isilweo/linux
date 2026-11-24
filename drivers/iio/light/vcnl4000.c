@@ -90,6 +90,7 @@
 #define VCNL4040_ALS_CONF_INT_EN	BIT(1) /* Ambient light Interrupt enable */
 #define VCNL4040_ALS_CONF_PERS	GENMASK(3, 2) /* Ambient interrupt persistence setting */
 #define VCNL4040_PS_CONF1_PS_SHUTDOWN	BIT(0)
+#define VCNL4040_PS_CONF1_PS_DUTY	GENMASK(7, 6) /* IR LED on/off duty ratio */
 #define VCNL4040_PS_CONF2_PS_IT	GENMASK(3, 1) /* Proximity integration time */
 #define VCNL4040_CONF1_PS_PERS	GENMASK(5, 4) /* Proximity interrupt persistence setting */
 #define VCNL4040_PS_CONF2_PS_HD		BIT(11)	/* Proximity high definition */
@@ -123,6 +124,12 @@
 #define VCNL4040_CONF3_PS_SAMPLE_16BITS \
 	(FIELD_PREP(VCNL4040_PS_CONF3_MPS, VCNL4040_CONF3_PS_MPS_16BITS) | \
 	 FIELD_PREP(VCNL4040_PS_MS_LED_I, VCNL4040_CONF3_PS_LED_I_16BITS))
+
+/* VCNL4200 low-power IR LED settings, as used by the vendor ADSP driver */
+#define VCNL4200_PS_DUTY_1_1280		3
+#define VCNL4200_PS_IT_8T		4
+#define VCNL4200_PS_LED_I_75MA		1
+#define VCNL4200_PS_MPS_2		1
 
 static const int vcnl4010_prox_sampling_frequency[][2] = {
 	{1, 950000},
@@ -330,10 +337,51 @@ static int vcnl4200_set_power_state(struct vcnl4000_data *data, bool on)
 	if (on) {
 		/* Wait at least one integration cycle before fetching data */
 		data->vcnl4200_al.last_measurement = ktime_get();
-		data->vcnl4200_ps.last_measurement = ktime_get();
+		/* Keep a later deadline set by an integration time change */
+		guard(mutex)(&data->vcnl4200_ps.lock);
+		data->vcnl4200_ps.last_measurement =
+			max(data->vcnl4200_ps.last_measurement, ktime_get());
 	}
 
 	return 0;
+}
+
+/*
+ * At the reset duty ratio (1/40 on the VCNL4040, 1/160 on the VCNL4200) a
+ * proximity measurement takes 50 times the integration time listed in
+ * ps_it_times, and each PS_Duty step doubles that.
+ */
+static u32 vcnl4040_ps_period_us(struct vcnl4000_data *data, u16 ps_conf1)
+{
+	unsigned int it = FIELD_GET(VCNL4040_PS_CONF2_PS_IT, ps_conf1);
+	unsigned int duty = FIELD_GET(VCNL4040_PS_CONF1_PS_DUTY, ps_conf1);
+
+	if (it >= data->chip_spec->num_ps_it_times)
+		it = data->chip_spec->num_ps_it_times - 1;
+
+	return ((*data->chip_spec->ps_it_times)[it][1] * 50) << duty;
+}
+
+/*
+ * Wait one PS period, with 20% tolerance, between samples.
+ *
+ * Called after PS_CONF1 was written, with the PS channel lock held so
+ * that no measurement runs in between. The sensor first completes the
+ * measurement in progress with the old settings, so the first sample
+ * with the new ones is only taken one new period after the expected
+ * end of that measurement. If the settings change again before that,
+ * the end of the measurement in progress is not moved earlier.
+ */
+static void vcnl4040_set_ps_sampling_rate(struct vcnl4000_data *data,
+					  u16 ps_conf1)
+{
+	ktime_t old_end = ktime_add(ktime_get(),
+				    data->vcnl4200_ps.sampling_rate);
+
+	data->vcnl4200_ps.sampling_rate =
+		us_to_ktime(vcnl4040_ps_period_us(data, ps_conf1) * 6 / 5);
+	data->vcnl4200_ps.last_measurement =
+		max(data->vcnl4200_ps.last_measurement, old_end);
 }
 
 static int vcnl4200_init(struct vcnl4000_data *data)
@@ -372,14 +420,10 @@ static int vcnl4200_init(struct vcnl4000_data *data)
 	case VCNL4200_PROD_ID:
 		/* Default wait time is 50ms, add 20% tolerance. */
 		data->vcnl4200_al.sampling_rate = ktime_set(0, 60000 * 1000);
-		/* Default wait time is 4.8ms, add 20% tolerance. */
-		data->vcnl4200_ps.sampling_rate = ktime_set(0, 5760 * 1000);
 		break;
 	case VCNL4040_PROD_ID:
 		/* Default wait time is 80ms, add 20% tolerance. */
 		data->vcnl4200_al.sampling_rate = ktime_set(0, 96000 * 1000);
-		/* Default wait time is 5ms, add 20% tolerance. */
-		data->vcnl4200_ps.sampling_rate = ktime_set(0, 6000 * 1000);
 		break;
 	}
 	data->al_scale = data->chip_spec->ulux_step;
@@ -404,10 +448,19 @@ static int vcnl4200_init(struct vcnl4000_data *data)
 	 * ps_int and als_int must match what is enabled in the chip.
 	 */
 	regval = (ret | VCNL4040_PS_CONF2_PS_HD) & ~VCNL4040_PS_CONF2_PS_INT;
+	if (id == VCNL4200_PROD_ID) {
+		regval &= ~(VCNL4040_PS_CONF1_PS_DUTY | VCNL4040_PS_CONF2_PS_IT);
+		regval |= FIELD_PREP(VCNL4040_PS_CONF1_PS_DUTY,
+				     VCNL4200_PS_DUTY_1_1280) |
+			  FIELD_PREP(VCNL4040_PS_CONF2_PS_IT, VCNL4200_PS_IT_8T);
+	}
 	ret = i2c_smbus_write_word_data(client, VCNL4200_PS_CONF1,
 					regval);
 	if (ret < 0)
 		return ret;
+
+	scoped_guard(mutex, &data->vcnl4200_ps.lock)
+		vcnl4040_set_ps_sampling_rate(data, regval);
 
 	ret = i2c_smbus_read_word_data(client, VCNL4200_AL_CONF);
 	if (ret < 0)
@@ -423,13 +476,23 @@ static int vcnl4200_init(struct vcnl4000_data *data)
 	if (ret < 0)
 		return ret;
 
-	/* Align proximity sensor sample rate to 16 bits data width */
+	/*
+	 * IR LED pulses and current: the low-power settings on the VCNL4200,
+	 * 8 pulses of 120 mA on the VCNL4040.
+	 */
 	ret = i2c_smbus_read_word_data(client, VCNL4200_PS_CONF3);
 	if (ret < 0)
 		return ret;
 
-	regval = ret | VCNL4040_CONF3_PS_SAMPLE_16BITS;
-	ret = i2c_smbus_write_word_data(client, VCNL4200_PS_CONF3, regval);
+	if (id == VCNL4200_PROD_ID) {
+		regval = ret & ~(VCNL4040_PS_CONF3_MPS | VCNL4040_PS_MS_LED_I);
+		regval |= FIELD_PREP(VCNL4040_PS_CONF3_MPS, VCNL4200_PS_MPS_2) |
+			  FIELD_PREP(VCNL4040_PS_MS_LED_I, VCNL4200_PS_LED_I_75MA);
+	} else {
+		regval = ret | VCNL4040_CONF3_PS_SAMPLE_16BITS;
+	}
+	ret = i2c_smbus_write_word_data(client, VCNL4200_PS_CONF3,
+					regval);
 	if (ret < 0)
 		return ret;
 
@@ -496,16 +559,29 @@ static int vcnl4200_measure(struct vcnl4000_data *data,
 	s64 delta;
 	ktime_t next_measurement;
 
-	scoped_guard(mutex, &chan->lock) {
-		next_measurement = ktime_add(chan->last_measurement,
-				chan->sampling_rate);
-		delta = ktime_us_delta(next_measurement, ktime_get());
-		if (delta > 0)
-			usleep_range(delta, delta + 500);
-		chan->last_measurement = ktime_get();
-	}
+	mutex_lock(&chan->lock);
 
+	/*
+	 * Sleep without the lock, so that the settings can be changed
+	 * meanwhile, and check again: a change moves the deadline.
+	 */
+	for (;;) {
+		next_measurement = ktime_add(chan->last_measurement,
+					     chan->sampling_rate);
+		delta = ktime_us_delta(next_measurement, ktime_get());
+		if (delta <= 0)
+			break;
+		mutex_unlock(&chan->lock);
+		fsleep(delta);
+		mutex_lock(&chan->lock);
+	}
+	chan->last_measurement = ktime_get();
+
+	/* Read under the lock, so that the settings cannot change meanwhile */
 	ret = i2c_smbus_read_word_data(data->client, chan->reg);
+
+	mutex_unlock(&chan->lock);
+
 	if (ret < 0)
 		return ret;
 
@@ -650,17 +726,25 @@ static ssize_t vcnl4040_write_ps_it(struct vcnl4000_data *data, int val)
 	if (index < 0)
 		return -EINVAL;
 
-	data->vcnl4200_ps.sampling_rate = ktime_set(0, val * 60 * NSEC_PER_USEC);
-
 	guard(mutex)(&data->vcnl4000_lock);
+	guard(mutex)(&data->vcnl4200_ps.lock);
 
 	ret = i2c_smbus_read_word_data(data->client, VCNL4200_PS_CONF1);
 	if (ret < 0)
 		return ret;
 
+	/* Unchanged: the samples are valid, do not delay the next read */
+	if (FIELD_GET(VCNL4040_PS_CONF2_PS_IT, ret) == index)
+		return 0;
+
 	regval = (ret & ~VCNL4040_PS_CONF2_PS_IT) |
 	    FIELD_PREP(VCNL4040_PS_CONF2_PS_IT, index);
-	return i2c_smbus_write_word_data(data->client, VCNL4200_PS_CONF1, regval);
+	ret = i2c_smbus_write_word_data(data->client, VCNL4200_PS_CONF1,
+					regval);
+	if (!ret)
+		vcnl4040_set_ps_sampling_rate(data, regval);
+
+	return ret;
 }
 
 static ssize_t vcnl4040_read_als_period(struct vcnl4000_data *data, int *val, int *val2)
