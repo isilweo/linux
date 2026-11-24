@@ -1925,11 +1925,17 @@ int msm_vfe_subdev_init(struct camss *camss, struct vfe_device *vfe,
 	}
 
 	if (vfe->res->has_vbif) {
-		vfe->vbif_base = devm_platform_ioremap_resource_byname(pdev,
-								       vfe->res->vbif_name);
-		if (IS_ERR(vfe->vbif_base)) {
-			dev_err(dev, "could not map vbif memory\n");
-			return PTR_ERR(vfe->vbif_base);
+		struct resource *vbif;
+
+		vbif = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+						    vfe->res->vbif_name);
+		/* The VBIF region is optional in the MSM8953 binding */
+		if (vbif || camss->res->version != CAMSS_8x53) {
+			vfe->vbif_base = devm_ioremap_resource(dev, vbif);
+			if (IS_ERR(vfe->vbif_base)) {
+				dev_err(dev, "could not map vbif memory\n");
+				return PTR_ERR(vfe->vbif_base);
+			}
 		}
 	}
 

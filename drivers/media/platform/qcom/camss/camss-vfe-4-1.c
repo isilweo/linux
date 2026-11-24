@@ -746,7 +746,7 @@ static void vfe_set_qos(struct vfe_device *vfe)
 	writel_relaxed(val7, vfe->base + VFE_0_BUS_BDG_QOS_CFG_7);
 
 	/* SoC-specific VBIF settings */
-	if (vfe->res->has_vbif) {
+	if (vfe->vbif_base) {
 		ret = vfe_vbif_apply_settings(vfe);
 		if (ret < 0) {
 			dev_err_ratelimited(vfe->camss->dev,
