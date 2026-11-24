@@ -65,7 +65,8 @@ fill_buf_mode(struct hfi_plat_caps *cap, const void *data, unsigned int num)
 }
 
 static int
-parse_alloc_mode(struct venus_core *core, u32 codecs, u32 domain, void *data)
+parse_alloc_mode(struct venus_core *core, u32 codecs, u32 domain, void *data,
+		 u32 rem_bytes)
 {
 	struct hfi_buffer_alloc_mode_supported *mode = data;
 	u32 num_entries = mode->num_entries;
@@ -73,6 +74,9 @@ parse_alloc_mode(struct venus_core *core, u32 codecs, u32 domain, void *data)
 
 	if (num_entries > MAX_ALLOC_MODE_ENTRIES)
 		return -EINVAL;
+
+	if (struct_size(mode, data, num_entries) > rem_bytes)
+		return -EOVERFLOW;
 
 	type = mode->data;
 
@@ -85,7 +89,7 @@ parse_alloc_mode(struct venus_core *core, u32 codecs, u32 domain, void *data)
 		type++;
 	}
 
-	return mode->num_entries * sizeof(u32) + sizeof(*mode);
+	return sizeof(*mode) + sizeof(u32) * mode->num_entries;
 }
 
 static void fill_profile_level(struct hfi_plat_caps *cap, const void *data,
@@ -101,7 +105,8 @@ static void fill_profile_level(struct hfi_plat_caps *cap, const void *data,
 }
 
 static int
-parse_profile_level(struct venus_core *core, u32 codecs, u32 domain, void *data)
+parse_profile_level(struct venus_core *core, u32 codecs, u32 domain, void *data,
+		 u32 rem_bytes)
 {
 	struct hfi_profile_level_supported *pl = data;
 	struct hfi_profile_level *proflevel = pl->profile_level;
@@ -109,6 +114,9 @@ parse_profile_level(struct venus_core *core, u32 codecs, u32 domain, void *data)
 
 	if (pl->profile_count > HFI_MAX_PROFILE_COUNT)
 		return -EINVAL;
+
+	if (struct_size(pl, profile_level, pl->profile_count) > rem_bytes)
+		return -EOVERFLOW;
 
 	memcpy(pl_arr, proflevel, pl->profile_count * sizeof(*proflevel));
 
@@ -131,22 +139,48 @@ fill_caps(struct hfi_plat_caps *cap, const void *data, unsigned int num)
 }
 
 static int
-parse_caps(struct venus_core *core, u32 codecs, u32 domain, void *data)
+parse_caps(struct venus_core *core, u32 codecs, u32 domain, void *data,
+	   u32 rem_bytes, bool sys_init)
 {
 	struct hfi_capabilities *caps = data;
 	struct hfi_capability *cap = caps->data;
-	u32 num_caps = caps->num_capabilities;
 	struct hfi_capability caps_arr[MAX_CAP_ENTRIES] = {};
+	u32 num_caps;
+	size_t size;
 
+	if (rem_bytes < sizeof(*caps))
+		return -EOVERFLOW;
+
+	num_caps = caps->num_capabilities;
 	if (num_caps > MAX_CAP_ENTRIES)
 		return -EINVAL;
+
+	size = struct_size(caps, data, num_caps);
+
+	/*
+	 * The VIDEO.VE.4.2 firmware on MSM8953 (HFI 3xx) ends SYS_INIT_DONE
+	 * with this property and cuts the packet 8 bytes into its last
+	 * capability entry. Drop that entry and consume the rest of the
+	 * packet. Any other short property is still an error.
+	 */
+	if (size > rem_bytes) {
+		if (!sys_init || !IS_V3(core) ||
+		    size - rem_bytes != sizeof(*cap) / 2)
+			return -EOVERFLOW;
+
+		dev_info_once(core->dev,
+			      "firmware cut the last capability (type %#x), dropping it\n",
+			      cap[num_caps - 1].capability_type);
+		num_caps--;
+		size = rem_bytes;
+	}
 
 	memcpy(caps_arr, cap, num_caps * sizeof(*cap));
 
 	for_each_codec(core->caps, ARRAY_SIZE(core->caps), codecs, domain,
 		       fill_caps, caps_arr, num_caps);
 
-	return num_caps * sizeof(*cap) + sizeof(u32);
+	return size;
 }
 
 static void fill_raw_fmts(struct hfi_plat_caps *cap, const void *fmts,
@@ -162,34 +196,41 @@ static void fill_raw_fmts(struct hfi_plat_caps *cap, const void *fmts,
 }
 
 static int
-parse_raw_formats(struct venus_core *core, u32 codecs, u32 domain, void *data)
+parse_raw_formats(struct venus_core *core, u32 codecs, u32 domain, void *data, u32 rem_bytes)
 {
 	struct hfi_uncompressed_format_supported *fmt = data;
-	struct hfi_uncompressed_plane_info *pinfo = &fmt->plane_info;
-	struct hfi_uncompressed_plane_constraints *constr;
 	struct raw_formats rawfmts[MAX_FMT_ENTRIES] = {};
-	u32 entries = fmt->format_entries;
+	u32 entries;
+	u32 size, num_planes;
 	unsigned int i = 0;
-	u32 num_planes = 0;
-	u32 size = 2 * sizeof(u32);
 
-	while (entries) {
+	size = offsetof(typeof(*fmt), plane_info);
+
+	if (size > rem_bytes)
+		return -EOVERFLOW;
+
+	for (entries = fmt->format_entries; entries; entries--) {
+		struct hfi_uncompressed_plane_info *pinfo = data + size;
+
+		if (rem_bytes - size < offsetof(typeof(*pinfo), plane_constraints))
+			return -EOVERFLOW;
+
 		num_planes = pinfo->num_planes;
+		if (num_planes > MAX_PLANES)
+			return -EINVAL;
+
+		size += offsetof(typeof(*pinfo), plane_constraints) +
+			num_planes * sizeof(pinfo->plane_constraints);
+
+		if (size > rem_bytes)
+			return -EOVERFLOW;
+
+		if (i >= MAX_FMT_ENTRIES)
+			continue;
 
 		rawfmts[i].fmt = pinfo->format;
 		rawfmts[i].buftype = fmt->buffer_type;
 		i++;
-
-		if (i >= MAX_FMT_ENTRIES)
-			return -EINVAL;
-
-		if (pinfo->num_planes > MAX_PLANES)
-			break;
-
-		size += sizeof(*constr) * num_planes + 2 * sizeof(u32);
-		pinfo = (void *)pinfo + sizeof(*constr) * num_planes +
-			2 * sizeof(u32);
-		entries--;
 	}
 
 	for_each_codec(core->caps, ARRAY_SIZE(core->caps), codecs, domain,
@@ -317,11 +358,13 @@ u32 hfi_parser(struct venus_core *core, struct venus_inst *inst, void *buf,
 	}
 
 	while (words < frame_size) {
-		payload = words + 1;
+		u32 property = words[0];
+		payload = ++words;
+		rem_bytes -= 4;
 
-		switch (*words) {
+		switch (property) {
 		case HFI_PROPERTY_PARAM_CODEC_SUPPORTED:
-			if (rem_bytes <= sizeof(struct hfi_codec_supported))
+			if (rem_bytes < sizeof(struct hfi_codec_supported))
 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
 
 			ret = parse_codecs(core, payload);
@@ -331,40 +374,35 @@ u32 hfi_parser(struct venus_core *core, struct venus_inst *inst, void *buf,
 			init_codecs(core);
 			break;
 		case HFI_PROPERTY_PARAM_MAX_SESSIONS_SUPPORTED:
-			if (rem_bytes <= sizeof(struct hfi_max_sessions_supported))
+			if (rem_bytes < sizeof(struct hfi_max_sessions_supported))
 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
 
 			ret = parse_max_sessions(core, payload);
 			break;
 		case HFI_PROPERTY_PARAM_CODEC_MASK_SUPPORTED:
-			if (rem_bytes <= sizeof(struct hfi_codec_mask_supported))
+			if (rem_bytes < sizeof(struct hfi_codec_mask_supported))
 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
 
 			ret = parse_codecs_mask(&codecs, &domain, payload);
 			break;
 		case HFI_PROPERTY_PARAM_UNCOMPRESSED_FORMAT_SUPPORTED:
-			if (rem_bytes <= sizeof(struct hfi_uncompressed_format_supported))
-				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
-
-			ret = parse_raw_formats(core, codecs, domain, payload);
+			ret = parse_raw_formats(core, codecs, domain, payload, rem_bytes);
 			break;
 		case HFI_PROPERTY_PARAM_CAPABILITY_SUPPORTED:
-			if (rem_bytes <= sizeof(struct hfi_capabilities))
-				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
-
-			ret = parse_caps(core, codecs, domain, payload);
+			ret = parse_caps(core, codecs, domain, payload,
+					 rem_bytes, !inst);
 			break;
 		case HFI_PROPERTY_PARAM_PROFILE_LEVEL_SUPPORTED:
-			if (rem_bytes <= sizeof(struct hfi_profile_level_supported))
+			if (rem_bytes < sizeof(struct hfi_profile_level_supported))
 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
 
-			ret = parse_profile_level(core, codecs, domain, payload);
+			ret = parse_profile_level(core, codecs, domain, payload, rem_bytes);
 			break;
 		case HFI_PROPERTY_PARAM_BUFFER_ALLOC_MODE_SUPPORTED:
-			if (rem_bytes <= sizeof(struct hfi_buffer_alloc_mode_supported))
+			if (rem_bytes < sizeof(struct hfi_buffer_alloc_mode_supported))
 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
 
-			ret = parse_alloc_mode(core, codecs, domain, payload);
+			ret = parse_alloc_mode(core, codecs, domain, payload, rem_bytes);
 			break;
 		case HFI_PROPERTY_PARAM_INTERLACE_FORMAT_SUPPORTED:
 			ret = sizeof(struct hfi_interlace_format_supported);
@@ -373,11 +411,12 @@ u32 hfi_parser(struct venus_core *core, struct venus_inst *inst, void *buf,
 			ret = sizeof(struct hfi_seq_header_info);
 			break;
 		default:
-			ret = sizeof(u32);
+			dev_warn_once(core->dev, "Unsupported property: %x\n", property);
+			ret = 0;
 			break;
 		}
 
-		if (ret < 0)
+		if (ret < 0 || rem_bytes < ret)
 			return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
 
 		words += ret / sizeof(u32);
