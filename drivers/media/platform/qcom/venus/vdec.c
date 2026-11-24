@@ -544,6 +544,37 @@ static int vdec_subscribe_event(struct v4l2_fh *fh,
 	}
 }
 
+static int vdec_pm_get(struct venus_inst *inst)
+{
+	struct venus_core *core = inst->core;
+	struct device *dev = core->dev_dec;
+	int ret;
+
+	mutex_lock(&core->pm_lock);
+	ret = pm_runtime_resume_and_get(dev);
+	mutex_unlock(&core->pm_lock);
+
+	return ret;
+}
+
+static int vdec_pm_put(struct venus_inst *inst, bool autosuspend)
+{
+	struct venus_core *core = inst->core;
+	struct device *dev = core->dev_dec;
+	int ret;
+
+	mutex_lock(&core->pm_lock);
+
+	if (autosuspend)
+		ret = pm_runtime_put_autosuspend(dev);
+	else
+		ret = pm_runtime_put_sync(dev);
+
+	mutex_unlock(&core->pm_lock);
+
+	return ret < 0 ? ret : 0;
+}
+
 static int
 vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
 {
@@ -609,7 +640,17 @@ vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
 			inst->drain_active = true;
 		}
 
-		ret = hfi_session_process_buf(inst, &fdata);
+		/*
+		 * Sending the EOS with the vcodec clocks off hangs the SoC on
+		 * MSM8953, so resume the decoder first. The autosuspend put
+		 * keeps it up for the autosuspend delay after the EOS is
+		 * queued; buffers returned by the firmware extend that.
+		 */
+		ret = vdec_pm_get(inst);
+		if (!ret) {
+			ret = hfi_session_process_buf(inst, &fdata);
+			vdec_pm_put(inst, true);
+		}
 
 		if (ret && was_decoding &&
 		    inst->codec_state == VENUS_DEC_STATE_DRAIN) {
@@ -657,37 +698,6 @@ static const struct v4l2_ioctl_ops vdec_ioctl_ops = {
 	.vidioc_try_decoder_cmd = v4l2_m2m_ioctl_try_decoder_cmd,
 	.vidioc_decoder_cmd = vdec_decoder_cmd,
 };
-
-static int vdec_pm_get(struct venus_inst *inst)
-{
-	struct venus_core *core = inst->core;
-	struct device *dev = core->dev_dec;
-	int ret;
-
-	mutex_lock(&core->pm_lock);
-	ret = pm_runtime_resume_and_get(dev);
-	mutex_unlock(&core->pm_lock);
-
-	return ret;
-}
-
-static int vdec_pm_put(struct venus_inst *inst, bool autosuspend)
-{
-	struct venus_core *core = inst->core;
-	struct device *dev = core->dev_dec;
-	int ret;
-
-	mutex_lock(&core->pm_lock);
-
-	if (autosuspend)
-		ret = pm_runtime_put_autosuspend(dev);
-	else
-		ret = pm_runtime_put_sync(dev);
-
-	mutex_unlock(&core->pm_lock);
-
-	return ret < 0 ? ret : 0;
-}
 
 static int vdec_pm_get_put(struct venus_inst *inst)
 {
