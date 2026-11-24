@@ -545,6 +545,8 @@ static int vdec_subscribe_event(struct v4l2_fh *fh,
 	}
 }
 
+static int vdec_pm_get_put(struct venus_inst *inst);
+
 static int
 vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
 {
@@ -554,6 +556,11 @@ vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
 	int ret;
 
 	ret = v4l2_m2m_ioctl_try_decoder_cmd(file, fh, cmd);
+	if (ret)
+		return ret;
+
+	/* sending a command with the vcodec clocks off hangs the SoC */
+	ret = vdec_pm_get_put(inst);
 	if (ret)
 		return ret;
 
