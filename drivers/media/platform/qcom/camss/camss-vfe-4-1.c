@@ -218,13 +218,19 @@
 
 #define MSM_VFE_VFE0_UB_SIZE 1023
 #define MSM_VFE_VFE0_UB_SIZE_RDI (MSM_VFE_VFE0_UB_SIZE / 3)
+/* MSM8953 VFE0: 2048 UB words split in three, depth encoded as words - 1 */
+#define MSM_VFE_VFE0_UB_WORDS_8X53 2048
+#define MSM_VFE_VFE0_UB_SIZE_RDI_8X53 (MSM_VFE_VFE0_UB_WORDS_8X53 / 3 - 1)
 
-static u16 vfe_get_ub_size(u8 vfe_id)
+static u16 vfe_get_ub_size(struct vfe_device *vfe)
 {
-	if (vfe_id == 0)
-		return MSM_VFE_VFE0_UB_SIZE_RDI;
+	if (vfe->id != 0)
+		return 0;
 
-	return 0;
+	if (vfe->camss->res->version == CAMSS_8x53)
+		return MSM_VFE_VFE0_UB_SIZE_RDI_8X53;
+
+	return MSM_VFE_VFE0_UB_SIZE_RDI;
 }
 
 static inline void vfe_reg_clr(struct vfe_device *vfe, u32 reg, u32 clr_bits)
