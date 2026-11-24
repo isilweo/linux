@@ -965,13 +965,16 @@ static int venc_set_properties(struct venus_inst *inst)
 	if (ret)
 		return ret;
 
-	ptype = HFI_PROPERTY_PARAM_VENC_LTRMODE;
-	ltr_mode.ltr_count = ctr->ltr_count;
-	ltr_mode.ltr_mode = HFI_LTR_MODE_MANUAL;
-	ltr_mode.trust_mode = 1;
-	ret = hfi_session_set_property(inst, ptype, &ltr_mode);
-	if (ret)
-		return ret;
+	/* manual LTR mode without LTR frames hangs Venus 3.x */
+	if (ctr->ltr_count) {
+		ptype = HFI_PROPERTY_PARAM_VENC_LTRMODE;
+		ltr_mode.ltr_count = ctr->ltr_count;
+		ltr_mode.ltr_mode = HFI_LTR_MODE_MANUAL;
+		ltr_mode.trust_mode = 1;
+		ret = hfi_session_set_property(inst, ptype, &ltr_mode);
+		if (ret)
+			return ret;
+	}
 
 	switch (inst->hfi_codec) {
 	case HFI_VIDEO_CODEC_H264:
