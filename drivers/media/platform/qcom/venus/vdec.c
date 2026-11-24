@@ -551,6 +551,7 @@ vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
 	struct venus_inst *inst = to_inst(file);
 	struct vb2_queue *dst_vq;
 	struct hfi_frame_data fdata = {0};
+	bool was_decoding;
 	int ret;
 
 	ret = v4l2_m2m_ioctl_try_decoder_cmd(file, fh, cmd);
@@ -559,12 +560,28 @@ vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
 
 	mutex_lock(&inst->lock);
 
+	/* STOP with a queue not streaming succeeds without draining */
+	if (cmd->cmd == V4L2_DEC_CMD_STOP &&
+	    !(inst->streamon_out && inst->streamon_cap))
+		goto unlock;
+
+	/*
+	 * No new command while draining; STOP is also refused during a
+	 * resolution change inside a drain.
+	 */
+	if (inst->codec_state == VENUS_DEC_STATE_DRAIN ||
+	    (cmd->cmd == V4L2_DEC_CMD_STOP && inst->drain_active)) {
+		ret = -EBUSY;
+		goto unlock;
+	}
+
 	if (cmd->cmd == V4L2_DEC_CMD_STOP) {
 		/*
 		 * Implement V4L2_DEC_CMD_STOP by enqueue an empty buffer on
 		 * decoder input to signal EOS.
 		 */
-		if (!(inst->streamon_out && inst->streamon_cap))
+		/* already drained: a second EOS would give a spurious LAST */
+		if (inst->codec_state == VENUS_DEC_STATE_STOPPED)
 			goto unlock;
 
 		fdata.buffer_type = HFI_BUFFER_INPUT;
@@ -581,11 +598,24 @@ vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
 		else
 			fdata.device_addr = 0xdeadb000;
 
-		ret = hfi_session_process_buf(inst, &fdata);
-
-		if (!ret && inst->codec_state == VENUS_DEC_STATE_DECODING) {
+		/*
+		 * Enter DRAIN before the firmware can answer, so that its LAST
+		 * buffer finds the state set, and forget the end of an earlier
+		 * drain.
+		 */
+		was_decoding = inst->codec_state == VENUS_DEC_STATE_DECODING;
+		if (was_decoding) {
+			atomic_set(&inst->eos_last_pending, 0);
 			inst->codec_state = VENUS_DEC_STATE_DRAIN;
 			inst->drain_active = true;
+		}
+
+		ret = hfi_session_process_buf(inst, &fdata);
+
+		if (ret && was_decoding &&
+		    inst->codec_state == VENUS_DEC_STATE_DRAIN) {
+			inst->codec_state = VENUS_DEC_STATE_DECODING;
+			inst->drain_active = false;
 		}
 	} else if (cmd->cmd == V4L2_DEC_CMD_START &&
 		   inst->codec_state == VENUS_DEC_STATE_STOPPED) {
@@ -1041,6 +1071,8 @@ static int vdec_verify_conf(struct venus_inst *inst)
 
 static int vdec_start_capture(struct venus_inst *inst)
 {
+	enum venus_dec_state old_state;
+	u32 old_sequence;
 	int ret;
 
 	if (!inst->streamon_out)
@@ -1081,9 +1113,24 @@ reconfigure:
 	if (ret)
 		goto err;
 
+	/*
+	 * Publish the new state before the firmware can answer: a quick
+	 * LAST of a resumed drain must find DRAIN, not be lost on STOPPED.
+	 * drain_active stays set until the drain ends.
+	 */
+	old_state = inst->codec_state;
+	old_sequence = inst->sequence_cap;
+	inst->codec_state = inst->drain_active ? VENUS_DEC_STATE_DRAIN :
+						 VENUS_DEC_STATE_DECODING;
+	inst->sequence_cap = 0;
+
 	ret = hfi_session_continue(inst);
-	if (ret)
+	if (ret) {
+		/* nothing reached the firmware, so nothing can have answered */
+		inst->codec_state = old_state;
+		inst->sequence_cap = old_sequence;
 		goto free_dpb_bufs;
+	}
 
 	ret = venus_helper_queue_dpb_bufs(inst);
 	if (ret)
@@ -1093,15 +1140,8 @@ reconfigure:
 	if (ret)
 		goto free_dpb_bufs;
 
-	inst->codec_state = VENUS_DEC_STATE_DECODING;
-
-	if (inst->drain_active)
-		inst->codec_state = VENUS_DEC_STATE_DRAIN;
-
 	inst->streamon_cap = 1;
-	inst->sequence_cap = 0;
 	inst->reconfig = false;
-	inst->drain_active = false;
 
 	return 0;
 
@@ -1278,6 +1318,9 @@ static int vdec_stop_output(struct venus_inst *inst)
 		break;
 	}
 
+	/* STREAMOFF on OUTPUT aborts a drain, also one interrupted by DRC */
+	inst->drain_active = false;
+
 	return ret;
 }
 
@@ -1378,13 +1421,23 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
 	struct venus_inst *inst = vb2_get_drv_priv(vb->vb2_queue);
 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
 	static const struct v4l2_event eos = { .type = V4L2_EVENT_EOS };
+	bool is_cap = V4L2_TYPE_IS_CAPTURE(vb->vb2_queue->type);
+	bool drained;
 
 	vdec_pm_get_put(inst);
 
 	mutex_lock(&inst->lock);
 
-	if (inst->next_buf_last && V4L2_TYPE_IS_CAPTURE(vb->vb2_queue->type) &&
-	    inst->codec_state == VENUS_DEC_STATE_DRC) {
+	/* the firmware ended the drain without a buffer to carry LAST */
+	drained = is_cap && inst->codec_state == VENUS_DEC_STATE_DRAIN &&
+		  atomic_xchg(&inst->eos_last_pending, 0);
+	if (drained) {
+		inst->codec_state = VENUS_DEC_STATE_STOPPED;
+		inst->drain_active = false;
+	}
+
+	if (drained || (is_cap && inst->next_buf_last &&
+			inst->codec_state == VENUS_DEC_STATE_DRC)) {
 		vbuf->flags |= V4L2_BUF_FLAG_LAST;
 		vbuf->sequence = inst->sequence_cap++;
 		vbuf->field = V4L2_FIELD_NONE;
@@ -1429,6 +1482,15 @@ static void vdec_buf_done(struct venus_inst *inst, unsigned int buf_type,
 	vbuf = venus_helper_find_buf(inst, type, tag);
 	if (!vbuf) {
 		venus_helper_change_dpb_owner(inst, vbuf, type, buf_type, tag);
+		/*
+		 * LAST came in a picture buffer the driver does not hold, e.g.
+		 * a READONLY reference kept by userspace. Record it; the next
+		 * capture buffer queued while draining ends the drain. No
+		 * inst->lock here: stop_streaming holds it waiting for a flush.
+		 */
+		if (buf_type == inst->opb_buftype &&
+		    (flags & V4L2_BUF_FLAG_LAST))
+			atomic_set(&inst->eos_last_pending, 1);
 		return;
 	}
 
