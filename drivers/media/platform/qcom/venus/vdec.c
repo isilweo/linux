@@ -1076,6 +1076,7 @@ reconfigure:
 	venus_pm_load_scale(inst);
 
 	inst->next_buf_last = false;
+	inst->eos_last_pending = false;
 
 	ret = venus_helper_alloc_dpb_bufs(inst);
 	if (ret)
@@ -1147,6 +1148,7 @@ static int vdec_start_output(struct venus_inst *inst)
 	inst->sequence_out = 0;
 	inst->reconfig = false;
 	inst->next_buf_last = false;
+	inst->eos_last_pending = false;
 
 	ret = vdec_set_properties(inst);
 	if (ret)
@@ -1383,8 +1385,10 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
 
 	mutex_lock(&inst->lock);
 
-	if (inst->next_buf_last && V4L2_TYPE_IS_CAPTURE(vb->vb2_queue->type) &&
-	    inst->codec_state == VENUS_DEC_STATE_DRC) {
+	if (V4L2_TYPE_IS_CAPTURE(vb->vb2_queue->type) &&
+	    ((inst->next_buf_last && inst->codec_state == VENUS_DEC_STATE_DRC) ||
+	     (inst->eos_last_pending &&
+	      inst->codec_state == VENUS_DEC_STATE_STOPPED))) {
 		vbuf->flags |= V4L2_BUF_FLAG_LAST;
 		vbuf->sequence = inst->sequence_cap++;
 		vbuf->field = V4L2_FIELD_NONE;
@@ -1392,6 +1396,7 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
 		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_DONE);
 		v4l2_event_queue_fh(&inst->fh, &eos);
 		inst->next_buf_last = false;
+		inst->eos_last_pending = false;
 		mutex_unlock(&inst->lock);
 		return;
 	}
@@ -1429,6 +1434,15 @@ static void vdec_buf_done(struct venus_inst *inst, unsigned int buf_type,
 	vbuf = venus_helper_find_buf(inst, type, tag);
 	if (!vbuf) {
 		venus_helper_change_dpb_owner(inst, vbuf, type, buf_type, tag);
+		/* EOS in a buffer still held by userspace: flag the next one */
+		if (type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE &&
+		    (flags & V4L2_BUF_FLAG_LAST) && inst->streamon_cap &&
+		    inst->sequence_cap &&
+		    inst->codec_state == VENUS_DEC_STATE_DRAIN) {
+			inst->drain_active = false;
+			inst->codec_state = VENUS_DEC_STATE_STOPPED;
+			inst->eos_last_pending = true;
+		}
 		return;
 	}
 
