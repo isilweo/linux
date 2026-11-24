@@ -48,6 +48,7 @@ static struct ccs_limit_offset {
  * ccs_module_idents - supported camera modules
  */
 static const struct ccs_module_ident ccs_module_idents[] = {
+	CCS_IDENT_LQ(0x00, 0x5034, -1, "s5kc505a", &smiapp_s5kc505a_quirk),
 	CCS_IDENT_L(0x01, 0x022b, -1, "vs6555"),
 	CCS_IDENT_L(0x01, 0x022e, -1, "vw6558"),
 	CCS_IDENT_L(0x07, 0x7698, -1, "ovm7698"),
