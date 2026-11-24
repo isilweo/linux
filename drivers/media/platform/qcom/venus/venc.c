@@ -700,6 +700,16 @@ static int venc_set_properties(struct venus_inst *inst)
 	if (ret)
 		return ret;
 
+	/* base rate control on the frame rate, not on buffer timestamps */
+	if (IS_V3(inst->core)) {
+		en.enable = 1;
+		ret = hfi_session_set_property(inst,
+					       HFI_PROPERTY_PARAM_VENC_DISABLE_RC_TIMESTAMP,
+					       &en);
+		if (ret)
+			return ret;
+	}
+
 	if (inst->fmt_cap->pixfmt == V4L2_PIX_FMT_H264) {
 		struct hfi_h264_vui_timing_info info;
 		struct hfi_h264_entropy_control entropy;
