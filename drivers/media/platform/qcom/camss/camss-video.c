@@ -21,7 +21,6 @@
 #define CAMSS_FRAME_MIN_WIDTH		1
 #define CAMSS_FRAME_MAX_WIDTH		8191
 #define CAMSS_FRAME_MIN_HEIGHT		1
-#define CAMSS_FRAME_MAX_HEIGHT_RDI	8191
 #define CAMSS_FRAME_MAX_HEIGHT_PIX	4096
 
 /* -----------------------------------------------------------------------------
@@ -451,7 +450,7 @@ static int video_enum_framesizes(struct file *file, void *fh,
 	fsize->stepwise.max_width = CAMSS_FRAME_MAX_WIDTH;
 	fsize->stepwise.min_height = CAMSS_FRAME_MIN_HEIGHT;
 	fsize->stepwise.max_height = (video->line_based) ?
-		CAMSS_FRAME_MAX_HEIGHT_PIX : CAMSS_FRAME_MAX_HEIGHT_RDI;
+		CAMSS_FRAME_MAX_HEIGHT_PIX : video->max_height;
 	fsize->stepwise.step_width = 1;
 	fsize->stepwise.step_height = 1;
 
@@ -509,7 +508,7 @@ static int __video_try_fmt(struct camss_video *video, struct v4l2_format *f)
 
 	pix_mp->pixelformat = fi->pixelformat;
 	pix_mp->width = clamp_t(u32, width, 1, CAMSS_FRAME_MAX_WIDTH);
-	pix_mp->height = clamp_t(u32, height, 1, CAMSS_FRAME_MAX_HEIGHT_RDI);
+	pix_mp->height = clamp_t(u32, height, 1, video->max_height);
 	pix_mp->num_planes = fi->planes;
 	for (i = 0; i < pix_mp->num_planes; i++) {
 		bpl = pix_mp->width / fi->hsub[i].numerator *

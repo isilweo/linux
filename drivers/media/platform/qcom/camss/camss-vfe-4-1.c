@@ -293,6 +293,27 @@ static void vfe_wm_frame_based(struct vfe_device *vfe, u8 wm, u8 enable)
 			1 << VFE_0_BUS_IMAGE_MASTER_n_WR_CFG_FRM_BASED_SHIFT);
 }
 
+/*
+ * MSM8953 needs the buffer geometry in frame based mode as well. The height
+ * field is 12 bits wide, rdi_max_height in vfe_res_8x53 keeps it in range.
+ */
+static void vfe_wm_frame_size(struct vfe_device *vfe, u8 wm,
+			      struct v4l2_pix_format_mplane *pix)
+{
+	u32 wpl = DIV_ROUND_UP(pix->plane_fmt[0].bytesperline, 8);
+	u32 reg;
+
+	if (vfe->camss->res->version != CAMSS_8x53)
+		return;
+
+	reg = 0x3;
+	reg |= (pix->height - 1) << 4;
+	reg |= wpl << 16;
+
+	writel_relaxed(reg, vfe->base +
+		       VFE_0_BUS_IMAGE_MASTER_n_WR_BUFFER_CFG(wm));
+}
+
 static void vfe_get_wm_sizes(struct v4l2_pix_format_mplane *pix, u8 plane,
 			     u16 *width, u16 *height, u16 *bytesperline)
 {
@@ -1012,6 +1033,7 @@ static const struct vfe_hw_ops_gen1 vfe_ops_gen1_4_1 = {
 	.set_xbar_cfg = vfe_set_xbar_cfg,
 	.wm_enable = vfe_wm_enable,
 	.wm_frame_based = vfe_wm_frame_based,
+	.wm_frame_size = vfe_wm_frame_size,
 	.wm_get_ping_pong_status = vfe_wm_get_ping_pong_status,
 	.wm_line_based = vfe_wm_line_based,
 	.wm_set_framedrop_pattern = vfe_wm_set_framedrop_pattern,

@@ -27,6 +27,8 @@ struct camss_buffer {
 
 struct camss_video;
 
+#define CAMSS_FRAME_MAX_HEIGHT_RDI	8191
+
 struct camss_video_ops {
 	int (*queue_buffer)(struct camss_video *vid, struct camss_buffer *buf);
 	int (*flush_buffers)(struct camss_video *vid,
@@ -46,6 +48,7 @@ struct camss_video {
 	struct mutex q_lock;
 	unsigned int bpl_alignment;
 	unsigned int line_based;
+	unsigned int max_height; /* set by the VFE */
 	const struct camss_format_info *formats;
 	unsigned int nformats;
 };
