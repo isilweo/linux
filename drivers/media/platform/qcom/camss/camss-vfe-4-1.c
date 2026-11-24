@@ -128,6 +128,14 @@
 #define VFE_0_BUS_BDG_QOS_CFG_6		0x2dc
 #define VFE_0_BUS_BDG_QOS_CFG_7		0x2e0
 #define VFE_0_BUS_BDG_QOS_CFG_7_CFG	0x0001aaa5
+#define VFE_0_BUS_BDG_QOS_CFG_8X53	0xaa55aa55
+
+/* MSM8953 ds-regs and ds-settings from the vendor device tree */
+#define VFE_0_DS_CFG(n)			(0x988 + 0x4 * (n))
+#define VFE_0_DS_CFG_NUM		16
+#define VFE_0_DS_CFG_8X53		0xcccc1111
+#define VFE_0_DS_CFG_LAST		0x9c8
+#define VFE_0_DS_CFG_LAST_8X53		0x110
 
 #define VFE_0_RDI_CFG_x(x)		(0x2e8 + (0x4 * (x)))
 #define VFE_0_RDI_CFG_x_RDI_STREAM_SEL_SHIFT	28
@@ -736,6 +744,11 @@ static void vfe_set_qos(struct vfe_device *vfe)
 	u32 val7 = VFE_0_BUS_BDG_QOS_CFG_7_CFG;
 	int ret;
 
+	if (vfe->camss->res->version == CAMSS_8x53) {
+		val = VFE_0_BUS_BDG_QOS_CFG_8X53;
+		val7 = VFE_0_BUS_BDG_QOS_CFG_8X53;
+	}
+
 	writel_relaxed(val, vfe->base + VFE_0_BUS_BDG_QOS_CFG_0);
 	writel_relaxed(val, vfe->base + VFE_0_BUS_BDG_QOS_CFG_1);
 	writel_relaxed(val, vfe->base + VFE_0_BUS_BDG_QOS_CFG_2);
@@ -758,7 +771,14 @@ static void vfe_set_qos(struct vfe_device *vfe)
 
 static void vfe_set_ds(struct vfe_device *vfe)
 {
-	/* empty */
+	int i;
+
+	if (vfe->camss->res->version != CAMSS_8x53)
+		return;
+
+	for (i = 0; i < VFE_0_DS_CFG_NUM; i++)
+		writel_relaxed(VFE_0_DS_CFG_8X53, vfe->base + VFE_0_DS_CFG(i));
+	writel_relaxed(VFE_0_DS_CFG_LAST_8X53, vfe->base + VFE_0_DS_CFG_LAST);
 }
 
 static void vfe_set_cgc_override(struct vfe_device *vfe, u8 wm, u8 enable)
