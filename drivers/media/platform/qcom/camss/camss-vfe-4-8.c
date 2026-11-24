@@ -1009,7 +1009,7 @@ static irqreturn_t vfe_isr(int irq, void *dev)
 	return IRQ_HANDLED;
 }
 
-static u16 vfe_get_ub_size(u8 vfe_id)
+static u16 vfe_get_ub_size(struct vfe_device *vfe)
 {
 	/* On VFE4.8 the ub-size is the same on both instances */
 	return MSM_VFE_VFE0_UB_SIZE_RDI;
