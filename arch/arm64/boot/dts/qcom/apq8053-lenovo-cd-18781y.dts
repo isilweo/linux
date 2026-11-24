@@ -287,7 +287,7 @@
 		touchscreen-size-x = <800>;
 		touchscreen-size-y = <1280>;
 
-		status = "disabled";
+		status = "okay"; /* only one of the two controllers is fitted */
 	};
 
 	hx83100a_ts: touchscreen@48 {
@@ -309,7 +309,7 @@
 		touchscreen-size-x = <800>;
 		touchscreen-size-y = <1280>;
 
-		status = "disabled";
+		status = "okay"; /* only one of the two controllers is fitted */
 	};
 };
 
