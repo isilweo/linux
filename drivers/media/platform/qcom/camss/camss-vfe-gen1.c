@@ -171,6 +171,7 @@ static int vfe_enable_output(struct vfe_line *line)
 	struct vfe_output *output = &line->output;
 	const struct vfe_hw_ops *ops = vfe->res->hw_ops;
 	struct media_pad *sensor_pad;
+	u32 height = line->video_out.active_fmt.fmt.pix_mp.height;
 	unsigned long flags;
 	unsigned int frame_skip = 0;
 	unsigned int i;
@@ -179,6 +180,11 @@ static int vfe_enable_output(struct vfe_line *line)
 	ub_size = vfe->ops_gen1->get_ub_size(vfe);
 	if (!ub_size)
 		return -EINVAL;
+
+	if (line->id != VFE_LINE_PIX && height > vfe_rdi_max_height(vfe)) {
+		dev_err(vfe->camss->dev, "RDI frame height %u too large\n", height);
+		return -EINVAL;
+	}
 
 	sensor_pad = camss_find_sensor_pad(&line->subdev.entity);
 	if (sensor_pad) {
@@ -245,6 +251,9 @@ static int vfe_enable_output(struct vfe_line *line)
 		vfe->ops_gen1->wm_set_ub_cfg(vfe, output->wm_idx[0],
 					    (ub_size + 1) * output->wm_idx[0], ub_size);
 		vfe->ops_gen1->wm_frame_based(vfe, output->wm_idx[0], 1);
+		if (vfe->ops_gen1->wm_frame_size)
+			vfe->ops_gen1->wm_frame_size(vfe, output->wm_idx[0],
+						     &line->video_out.active_fmt.fmt.pix_mp);
 		vfe->ops_gen1->wm_enable(vfe, output->wm_idx[0], 1);
 		vfe->ops_gen1->bus_reload_wm(vfe, output->wm_idx[0]);
 	} else {

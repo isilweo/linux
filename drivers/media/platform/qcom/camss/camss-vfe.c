@@ -1443,7 +1443,9 @@ static void vfe_try_format(struct vfe_line *line,
 			fmt->code = MEDIA_BUS_FMT_UYVY8_1X16;
 
 		fmt->width = clamp_t(u32, fmt->width, 1, 8191);
-		fmt->height = clamp_t(u32, fmt->height, 1, 8191);
+		fmt->height = clamp_t(u32, fmt->height, 1,
+				      line->id == VFE_LINE_PIX ? 8191 :
+				      vfe_rdi_max_height(to_vfe(line)));
 
 		fmt->field = V4L2_FIELD_NONE;
 		fmt->colorspace = V4L2_COLORSPACE_SRGB;
@@ -2187,6 +2189,7 @@ int msm_vfe_register_entities(struct vfe_device *vfe,
 		video_out->ops = &vfe->video_ops;
 		video_out->bpl_alignment = vfe_bpl_align(vfe);
 		video_out->line_based = 0;
+		video_out->max_height = vfe_rdi_max_height(vfe);
 		if (i == VFE_LINE_PIX) {
 			video_out->bpl_alignment = 16;
 			video_out->line_based = 1;

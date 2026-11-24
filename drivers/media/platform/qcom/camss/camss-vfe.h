@@ -138,6 +138,7 @@ struct vfe_subdev_resources {
 	char *pd_name;
 	bool has_vbif;
 	char *vbif_name;
+	u16 rdi_max_height; /* 0 means CAMSS_FRAME_MAX_HEIGHT_RDI */
 	const struct vfe_hw_ops *hw_ops;
 	const struct camss_formats *formats_rdi;
 	const struct camss_formats *formats_pix;
@@ -275,6 +276,12 @@ bool vfe_is_lite(struct vfe_device *vfe);
  * Return vfe hw version
  */
 u32 vfe_hw_version(struct vfe_device *vfe);
+
+static inline u32 vfe_rdi_max_height(const struct vfe_device *vfe)
+{
+	return vfe->res->rdi_max_height ?: CAMSS_FRAME_MAX_HEIGHT_RDI;
+}
+
 /*
  * vfe_enable - Enable streaming on VFE line
  * @line: VFE line
