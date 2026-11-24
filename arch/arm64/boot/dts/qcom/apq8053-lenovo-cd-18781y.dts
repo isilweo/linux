@@ -104,19 +104,15 @@
 			reg = <0x51>;
 
 			interrupt-parent = <&tlmm>;
-			interrupts = <43 IRQ_TYPE_EDGE_RISING>;
-			interrupt-names = "INT1";
+			interrupts = <43 IRQ_TYPE_EDGE_FALLING>;
+
+			vdd-supply = <&pm8953_l10>;
+			vio-supply = <&pm8953_l6>;
 
 			pinctrl-0 = <&alsp_int_default>;
 			pinctrl-names = "default";
 
-			/*
-			 * WARNING: Do not enable for now!
-			 * There's a chance that this can burn out the sensor's IR LED.
-			 * The sensor turns on the IR LED at high power (so that it
-			 * gets noticeably warm) and never turns it off.
-			 */
-			status = "disabled";
+			proximity-near-level = <8>;
 		};
 	};
 
