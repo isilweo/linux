@@ -3873,7 +3873,6 @@ static struct gdsc venus_core0_gdsc = {
 	.pd = {
 		.name = "venus_core0",
 	},
-	.flags = HW_CTRL,
 	.pwrsts = PWRSTS_OFF_ON,
 };
 
