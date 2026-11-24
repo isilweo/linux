@@ -2586,6 +2586,30 @@ static void ccs_get_native_size(struct ccs_subdev *ssd, struct v4l2_rect *r)
 	r->height = CCS_LIM(ssd->sensor, Y_ADDR_MAX) + 1;
 }
 
+/*
+ * Only the pixel array has a fixed size; the binner and scaler sizes depend
+ * on crop and compose.
+ */
+static int ccs_enum_frame_size(struct v4l2_subdev *subdev,
+			       struct v4l2_subdev_state *sd_state,
+			       struct v4l2_subdev_frame_size_enum *fse)
+{
+	struct ccs_sensor *sensor = to_ccs_sensor(subdev);
+	struct v4l2_rect r;
+
+	if (subdev != &sensor->pixel_array->sd || fse->index ||
+	    fse->code != sensor->internal_csi_format->code)
+		return -EINVAL;
+
+	ccs_get_native_size(sensor->pixel_array, &r);
+	fse->min_width = r.width;
+	fse->max_width = r.width;
+	fse->min_height = r.height;
+	fse->max_height = r.height;
+
+	return 0;
+}
+
 static int ccs_get_selection(struct v4l2_subdev *subdev,
 			     struct v4l2_subdev_state *sd_state,
 			     struct v4l2_subdev_selection *sel)
@@ -3108,6 +3132,7 @@ static const struct v4l2_subdev_video_ops ccs_video_ops = {
 
 static const struct v4l2_subdev_pad_ops ccs_pad_ops = {
 	.enum_mbus_code = ccs_enum_mbus_code,
+	.enum_frame_size = ccs_enum_frame_size,
 	.get_fmt = ccs_get_format,
 	.set_fmt = ccs_set_format,
 	.get_selection = ccs_get_selection,
