@@ -155,15 +155,17 @@ static int sdio_bus_probe(struct device *dev)
 	struct sdio_driver *drv = to_sdio_driver(dev->driver);
 	struct sdio_func *func = dev_to_sdio_func(dev);
 	const struct sdio_device_id *id;
+	const char *stage;
 	int ret;
 
 	id = sdio_match_device(func, drv);
 	if (!id)
 		return -ENODEV;
 
+	stage = "attaching PM domain";
 	ret = dev_pm_domain_attach(dev, 0);
 	if (ret)
-		return ret;
+		goto report_error;
 
 	atomic_inc(&func->card->sdio_funcs_probed);
 
@@ -174,6 +176,7 @@ static int sdio_bus_probe(struct device *dev)
 	 * pm_runtime_get_noresume() in its remove routine.
 	 */
 	if (func->card->host->caps & MMC_CAP_POWER_OFF_CARD) {
+		stage = "resuming SDIO function";
 		ret = pm_runtime_get_sync(dev);
 		if (ret < 0)
 			goto disable_runtimepm;
@@ -181,6 +184,7 @@ static int sdio_bus_probe(struct device *dev)
 
 	/* Set the default block size so the driver is sure it's something
 	 * sensible. */
+	stage = "setting default block size";
 	sdio_claim_host(func);
 	if (mmc_card_removed(func->card))
 		ret = -ENOMEDIUM;
@@ -190,6 +194,7 @@ static int sdio_bus_probe(struct device *dev)
 	if (ret)
 		goto disable_runtimepm;
 
+	stage = "probing function driver";
 	ret = drv->probe(func, id);
 	if (ret)
 		goto disable_runtimepm;
@@ -200,6 +205,9 @@ disable_runtimepm:
 	atomic_dec(&func->card->sdio_funcs_probed);
 	if (func->card->host->caps & MMC_CAP_POWER_OFF_CARD)
 		pm_runtime_put_noidle(dev);
+report_error:
+	if (ret == -ETIMEDOUT)
+		dev_err(dev, "timed out while %s\n", stage);
 	return ret;
 }
 
