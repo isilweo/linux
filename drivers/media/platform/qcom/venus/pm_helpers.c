@@ -8,6 +8,7 @@
 #include <linux/interconnect.h>
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
+#include <linux/of.h>
 #include <linux/pm_domain.h>
 #include <linux/pm_opp.h>
 #include <linux/pm_runtime.h>
@@ -480,6 +481,10 @@ vcodec_control_v3(struct venus_core *core, u32 session_type, bool enable)
 		ctrl = core->wrapper_base + WRAPPER_VDEC_VCODEC_POWER_CONTROL;
 	else
 		ctrl = core->wrapper_base + WRAPPER_VENC_VCODEC_POWER_CONTROL;
+
+	/* MSM8953 only supports software power collapse */
+	if (of_device_is_compatible(core->dev->of_node, "qcom,msm8953-venus"))
+		enable = true;
 
 	if (enable)
 		writel(0, ctrl);
