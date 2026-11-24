@@ -4614,24 +4614,50 @@ struct media_pad *camss_find_sensor_pad(struct media_entity *entity)
 	}
 }
 
+/*
+ * The transmitter is the first subdev upstream that does not belong to camss.
+ * For a sensor made of several subdevs (e.g. ccs) this is the one connected
+ * to the CSIPHY, which owns the link frequency, not the sensor entity.
+ */
+static struct media_pad *camss_find_transmitter_pad(struct media_entity *entity)
+{
+	struct device *dev = media_entity_to_v4l2_subdev(entity)->dev;
+	struct media_pad *pad;
+
+	while (1) {
+		pad = &entity->pads[0];
+		if (!(pad->flags & MEDIA_PAD_FL_SINK))
+			return NULL;
+
+		pad = media_pad_remote_pad_first(pad);
+		if (!pad || !is_media_entity_v4l2_subdev(pad->entity))
+			return NULL;
+
+		entity = pad->entity;
+
+		if (media_entity_to_v4l2_subdev(entity)->dev != dev)
+			return pad;
+	}
+}
+
 /**
- * camss_get_link_freq - Get link frequency from sensor
+ * camss_get_link_freq - Get link frequency from the transmitter
  * @entity: Media entity in the current pipeline
  * @bpp: Number of bits per pixel for the current format
- * @lanes: Number of lanes in the link to the sensor
+ * @lanes: Number of lanes in the link to the transmitter
  *
  * Return link frequency on success or a negative error code otherwise
  */
 s64 camss_get_link_freq(struct media_entity *entity, unsigned int bpp,
 			unsigned int lanes)
 {
-	struct media_pad *sensor_pad;
+	struct media_pad *pad;
 
-	sensor_pad = camss_find_sensor_pad(entity);
-	if (!sensor_pad)
+	pad = camss_find_transmitter_pad(entity);
+	if (!pad)
 		return -ENODEV;
 
-	return v4l2_get_link_freq(sensor_pad, bpp, 2 * lanes);
+	return v4l2_get_link_freq(pad, bpp, 2 * lanes);
 }
 
 /*
