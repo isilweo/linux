@@ -284,6 +284,10 @@ static int video_start_streaming(struct vb2_queue *q, unsigned int count)
 		ret = v4l2_subdev_call(subdev, video, s_stream, 1);
 		if (ret < 0 && ret != -ENOIOCTLCMD)
 			goto error;
+
+		/* stop at the sensor, it starts its own internal subdevs */
+		if (subdev->dev && subdev->dev != video->camss->dev)
+			break;
 	}
 
 	return 0;
@@ -325,6 +329,9 @@ static void video_stop_streaming(struct vb2_queue *q)
 			dev_err(video->camss->dev, "Video pipeline stop failed: %d\n", ret);
 			return;
 		}
+
+		if (subdev->dev && subdev->dev != video->camss->dev)
+			break;
 	}
 
 	video_device_pipeline_stop(vdev);
