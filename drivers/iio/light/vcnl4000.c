@@ -23,6 +23,7 @@
 #include <linux/err.h>
 #include <linux/delay.h>
 #include <linux/pm_runtime.h>
+#include <linux/regulator/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/units.h>
 
@@ -121,6 +122,8 @@
 #define VCNL4040_CONF3_PS_SAMPLE_16BITS \
 	(FIELD_PREP(VCNL4040_PS_CONF3_MPS, VCNL4040_CONF3_PS_MPS_16BITS) | \
 	 FIELD_PREP(VCNL4040_PS_MS_LED_I, VCNL4040_CONF3_PS_LED_I_16BITS))
+
+static const char * const vcnl4000_supplies[] = { "vdd", "vddio" };
 
 static const int vcnl4010_prox_sampling_frequency[][2] = {
 	{1, 950000},
@@ -1958,6 +1961,14 @@ static int vcnl4000_probe(struct i2c_client *client)
 	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*data));
 	if (!indio_dev)
 		return -ENOMEM;
+
+	ret = devm_regulator_bulk_get_enable(&client->dev,
+					     ARRAY_SIZE(vcnl4000_supplies),
+					     vcnl4000_supplies);
+	if (ret)
+		return dev_err_probe(&client->dev, ret,
+				     "failed to enable regulators\n");
+	fsleep(10000); /* VCNL4200 power-up time is < 3 ms */
 
 	data = iio_priv(indio_dev);
 	i2c_set_clientdata(client, indio_dev);
