@@ -215,3 +215,136 @@ static int tcm8500md_limits(struct ccs_sensor *sensor)
 const struct ccs_quirk smiapp_tcm8500md_quirk = {
 	.limits = tcm8500md_limits,
 };
+
+/*
+ * Samsung S5KC505A: incomplete clock limit registers, dual PLL, and a vendor
+ * init sequence taken from the Lenovo libmmcamera_s5kc505a.so.
+ */
+static int s5kc505a_limits(struct ccs_sensor *sensor)
+{
+	ccs_replace_limit(sensor, CCS_L_CLOCK_TREE_PLL_CAPABILITY, 0,
+			  CCS_CLOCK_TREE_PLL_CAPABILITY_DUAL_PLL);
+	ccs_replace_limit(sensor, CCS_L_CLOCK_CALCULATION, 0,
+			  CCS_CLOCK_CALCULATION_LANE_SPEED);
+	/* vendor mode timing; shorter blanking makes the VFE drop lines */
+	ccs_replace_limit(sensor, CCS_L_MIN_LINE_BLANKING_PCK, 0, 504);
+	ccs_replace_limit(sensor, CCS_L_MIN_FRAME_BLANKING_LINES, 0, 70);
+	/* lower VT PLL rates clip white; the *_MHZ limits are IEEE 754 floats */
+	ccs_replace_limit(sensor, CCS_L_MIN_PLL_OP_CLK_FREQ_MHZ, 0, 0x44098000); /* 550 */
+	ccs_replace_limit(sensor, CCS_L_MAX_PLL_OP_CLK_FREQ_MHZ, 0, 0x44160000); /* 600 */
+	ccs_replace_limit(sensor, CCS_L_MIN_VT_SYS_CLK_DIV, 0, 1);
+	ccs_replace_limit(sensor, CCS_L_MAX_VT_SYS_CLK_DIV, 0, 1);
+	ccs_replace_limit(sensor, CCS_L_MIN_VT_SYS_CLK_FREQ_MHZ, 0, 0x42c80000); /* 100 */
+	ccs_replace_limit(sensor, CCS_L_MAX_VT_SYS_CLK_FREQ_MHZ, 0, 0x447a0000); /* 1000 */
+	ccs_replace_limit(sensor, CCS_L_MAX_VT_PIX_CLK_FREQ_MHZ, 0, 0x43480000); /* 200 */
+	ccs_replace_limit(sensor, CCS_L_MIN_OP_SYS_CLK_DIV, 0, 1);
+	ccs_replace_limit(sensor, CCS_L_MAX_OP_SYS_CLK_DIV, 0, 1);
+	ccs_replace_limit(sensor, CCS_L_MIN_OP_SYS_CLK_FREQ_MHZ, 0, 0x42c80000); /* 100 */
+	ccs_replace_limit(sensor, CCS_L_MAX_OP_SYS_CLK_FREQ_MHZ, 0, 0x447a0000); /* 1000 */
+	ccs_replace_limit(sensor, CCS_L_MIN_OP_PIX_CLK_DIV, 0, 8);
+	ccs_replace_limit(sensor, CCS_L_MAX_OP_PIX_CLK_DIV, 0, 10);
+	ccs_replace_limit(sensor, CCS_L_MIN_OP_PIX_CLK_FREQ_MHZ, 0, 0x41200000); /* 10 */
+	ccs_replace_limit(sensor, CCS_L_MAX_OP_PIX_CLK_FREQ_MHZ, 0, 0x43480000); /* 200 */
+	return 0;
+}
+
+/* cci_write() needs the register width, unlike ccs_write_addr_8s() */
+static int s5kc505a_write(struct ccs_sensor *sensor,
+			  const struct ccs_reg_8 *regs, int len)
+{
+	int rval;
+
+	for (; len > 0; len--, regs++) {
+		rval = ccs_write_addr(sensor, CCI_REG8(regs->reg), regs->val);
+		if (rval)
+			return rval;
+	}
+
+	return 0;
+}
+
+static int s5kc505a_post_poweron(struct ccs_sensor *sensor)
+{
+	static const struct ccs_reg_8 init[] = {
+		{ 0x0a02, 0x0f },
+		{ 0x340f, 0x80 },
+		{ 0x3457, 0x04 },
+		{ 0x3419, 0x00 },
+		{ 0x3416, 0x40 },
+		{ 0x3418, 0x00 },
+		{ 0x3419, 0x04 },
+		{ 0x3419, 0x00 },
+		{ 0x3416, 0x40 },
+		{ 0x3418, 0x24 },
+		{ 0x3419, 0x04 },
+		{ 0x3419, 0x00 },
+		{ 0x3416, 0x40 },
+		{ 0x3418, 0x48 },
+		{ 0x3419, 0x04 },
+		{ 0x3419, 0x00 },
+		{ 0x3416, 0x40 },
+		{ 0x3418, 0x6c },
+		{ 0x3419, 0x04 },
+		{ 0x3419, 0x00 },
+		{ 0x3457, 0x0c },
+		{ 0x3457, 0x04 },
+		{ 0x307c, 0x16 },
+		{ 0x3087, 0xdc },
+		{ 0x3089, 0x0a },
+		{ 0x308b, 0x08 },
+		{ 0x308c, 0x0b },
+		{ 0x308e, 0x36 },
+		{ 0x3075, 0x4d },
+		{ 0x306f, 0xa8 },
+		{ 0x306a, 0x79 },
+		{ 0x3077, 0x10 },
+		{ 0x30b0, 0xc8 },
+		{ 0x3078, 0x17 },
+		{ 0x3070, 0x0f },
+		{ 0x0b00, 0x01 },
+		{ 0x0801, 0x10 },
+		{ 0x0804, 0x10 },
+		{ 0x3931, 0x02 },
+		{ 0x3930, 0x80 },
+		{ 0x3932, 0x60 },
+	};
+	static const struct ccs_reg_8 mode[] = {
+		{ 0x3c17, 0x00 },
+		{ 0x3c1f, 0x00 },
+		{ 0x0820, 0x03 },
+		{ 0x0821, 0xc0 },
+		{ 0x0b05, 0x01 },
+		{ 0x3303, 0x02 },
+		{ 0x3301, 0x00 },
+		{ 0x3400, 0x00 },
+		{ 0x0b00, 0x00 },
+		{ 0x3459, 0x75 },
+		{ 0x3c0f, 0x01 },
+		{ 0x300f, 0x01 },
+		{ 0x3010, 0x77 },
+		{ 0x3014, 0x01 },
+		{ 0x3015, 0x86 },
+		{ 0x3929, 0x07 },
+		{ 0x3906, 0x76 },
+		{ 0x3c02, 0x00 },
+		{ 0x3c03, 0xff },
+	};
+	int rval;
+
+	/* the vendor sequence waits 10 ms after the first write */
+	rval = s5kc505a_write(sensor, init, 1);
+	if (rval)
+		return rval;
+	usleep_range(10000, 11000);
+
+	rval = s5kc505a_write(sensor, init + 1, ARRAY_SIZE(init) - 1);
+	if (rval)
+		return rval;
+
+	return s5kc505a_write(sensor, mode, ARRAY_SIZE(mode));
+}
+
+const struct ccs_quirk smiapp_s5kc505a_quirk = {
+	.limits = s5kc505a_limits,
+	.post_poweron = s5kc505a_post_poweron,
+};
