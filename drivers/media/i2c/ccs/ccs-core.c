@@ -2518,6 +2518,7 @@ static int ccs_sel_supported(struct v4l2_subdev *subdev,
 			return 0;
 		return -EINVAL;
 	case V4L2_SEL_TGT_NATIVE_SIZE:
+	case V4L2_SEL_TGT_CROP_DEFAULT:
 		if (ssd == sensor->pixel_array && sel->pad == CCS_PA_PAD_SRC)
 			return 0;
 		return -EINVAL;
@@ -2632,6 +2633,7 @@ static int ccs_get_selection(struct v4l2_subdev *subdev,
 	switch (sel->target) {
 	case V4L2_SEL_TGT_CROP_BOUNDS:
 	case V4L2_SEL_TGT_NATIVE_SIZE:
+	case V4L2_SEL_TGT_CROP_DEFAULT:
 		if (ssd == sensor->pixel_array) {
 			ccs_get_native_size(ssd, &sel->r);
 		} else if (sel->pad == ssd->sink_pad) {
