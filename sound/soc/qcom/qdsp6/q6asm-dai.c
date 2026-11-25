@@ -71,6 +71,9 @@ struct q6asm_dai_rtd {
 	uint32_t stream_id;
 	uint16_t session_id;
 	enum stream_state state;
+	bool pcm_mapped;
+	bool pcm_open;
+	bool pcm_routed;
 	uint32_t initial_samples_drop;
 	uint32_t trailing_samples_drop;
 	bool notify_on_drain;
@@ -201,6 +204,53 @@ static void event_handler(uint32_t opcode, uint32_t token,
 	}
 }
 
+/*
+ * Undo what q6asm_dai_prepare() set up and return the first error. A failed
+ * CMD_CLOSE or unmap stays marked, so the next prepare or close retries it.
+ * While the stream may still be open in the DSP, its buffers stay mapped,
+ * except on the final teardown from close, which has no later chance.
+ */
+static int q6asm_dai_pcm_teardown(struct snd_soc_component *component,
+				  struct snd_pcm_substream *substream,
+				  bool final)
+{
+	struct q6asm_dai_rtd *prtd = substream->runtime->private_data;
+	struct snd_soc_pcm_runtime *soc_prtd = snd_soc_substream_to_rtd(substream);
+	struct device *dev = component->dev;
+	int ret = 0, err;
+
+	prtd->state = Q6ASM_STREAM_STOPPED;
+
+	if (prtd->pcm_open) {
+		ret = q6asm_cmd(prtd->audio_client, prtd->stream_id, CMD_CLOSE);
+		if (ret < 0)
+			dev_err(dev, "Failed to close q6asm stream %d: %d\n",
+				prtd->stream_id, ret);
+		else
+			prtd->pcm_open = false;
+	}
+
+	if (prtd->pcm_routed) {
+		q6routing_stream_close(soc_prtd->dai_link->id, substream->stream);
+		prtd->pcm_routed = false;
+	}
+
+	if (prtd->pcm_mapped && (final || !prtd->pcm_open)) {
+		err = q6asm_unmap_memory_regions(substream->stream,
+						 prtd->audio_client);
+		if (err < 0) {
+			dev_err(dev, "Failed to unmap memory regions for q6asm stream %d\n",
+				prtd->stream_id);
+			if (!ret)
+				ret = err;
+		} else {
+			prtd->pcm_mapped = false;
+		}
+	}
+
+	return ret;
+}
+
 static int q6asm_dai_prepare(struct snd_soc_component *component,
 			     struct snd_pcm_substream *substream)
 {
@@ -222,26 +272,10 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
 	}
 
 	prtd->pcm_count = snd_pcm_lib_period_bytes(substream);
-	/* rate and channels are sent to audio driver */
-	if (prtd->state == Q6ASM_STREAM_RUNNING) {
-		/* clear the previous setup if any  */
-		ret = q6asm_cmd(prtd->audio_client, prtd->stream_id, CMD_CLOSE);
-		if (ret < 0) {
-			dev_err(dev, "Failed to close q6asm stream %d\n", prtd->stream_id);
-			return ret;
-		}
-
-		ret = q6asm_unmap_memory_regions(substream->stream, prtd->audio_client);
-		if (ret < 0) {
-			dev_err(dev, "Failed to unmap memory regions for q6asm stream %d\n",
-				prtd->stream_id);
-			return ret;
-		}
-
-		q6routing_stream_close(soc_prtd->dai_link->id,
-					 substream->stream);
-		prtd->state = Q6ASM_STREAM_STOPPED;
-	}
+	/* clear the previous setup if any */
+	ret = q6asm_dai_pcm_teardown(component, substream, false);
+	if (ret < 0)
+		return ret;
 
 	/* ALSA resets appl_ptr for every prepare, including xrun recovery. */
 	prtd->queue_ptr = 0;
@@ -256,6 +290,7 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
 							ret);
 		return -ENOMEM;
 	}
+	prtd->pcm_mapped = true;
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		ret = q6asm_open_write(prtd->audio_client, prtd->stream_id,
@@ -269,16 +304,18 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
 
 	if (ret < 0) {
 		dev_err(dev, "%s: q6asm_open_write failed\n", __func__);
-		goto open_err;
+		goto err;
 	}
+	prtd->pcm_open = true;
 
 	prtd->session_id = q6asm_get_session_id(prtd->audio_client);
 	ret = q6routing_stream_open(soc_prtd->dai_link->id, LEGACY_PCM_MODE,
 			      prtd->session_id, substream->stream);
 	if (ret) {
 		dev_err(dev, "%s: stream reg failed ret:%d\n", __func__, ret);
-		goto routing_err;
+		goto err;
 	}
+	prtd->pcm_routed = true;
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		ret = q6asm_media_format_block_multi_ch_pcm(
@@ -297,18 +334,16 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
 			q6asm_read(prtd->audio_client, prtd->stream_id);
 
 	}
-	if (ret < 0)
-		dev_info(dev, "%s: CMD Format block failed\n", __func__);
-	else
-		prtd->state = Q6ASM_STREAM_RUNNING;
+	if (ret < 0) {
+		dev_err(dev, "%s: CMD Format block failed\n", __func__);
+		goto err;
+	}
 
-	return ret;
+	prtd->state = Q6ASM_STREAM_RUNNING;
+	return 0;
 
-routing_err:
-	q6asm_cmd(prtd->audio_client, prtd->stream_id,  CMD_CLOSE);
-open_err:
-	q6asm_unmap_memory_regions(substream->stream, prtd->audio_client);
-
+err:
+	q6asm_dai_pcm_teardown(component, substream, false);
 	return ret;
 }
 
@@ -460,22 +495,10 @@ static int q6asm_dai_open(struct snd_soc_component *component,
 static int q6asm_dai_close(struct snd_soc_component *component,
 			   struct snd_pcm_substream *substream)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct snd_soc_pcm_runtime *soc_prtd = snd_soc_substream_to_rtd(substream);
-	struct q6asm_dai_rtd *prtd = runtime->private_data;
+	struct q6asm_dai_rtd *prtd = substream->runtime->private_data;
 
-	if (prtd->audio_client) {
-		if (prtd->state == Q6ASM_STREAM_RUNNING) {
-			q6asm_cmd(prtd->audio_client, prtd->stream_id,
-				  CMD_CLOSE);
-			q6asm_unmap_memory_regions(substream->stream,
-					   prtd->audio_client);
-		}
-		q6asm_audio_client_free(prtd->audio_client);
-		prtd->audio_client = NULL;
-	}
-	q6routing_stream_close(soc_prtd->dai_link->id,
-						substream->stream);
+	q6asm_dai_pcm_teardown(component, substream, true);
+	q6asm_audio_client_free(prtd->audio_client);
 	kfree(prtd);
 	return 0;
 }
