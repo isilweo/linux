@@ -679,14 +679,22 @@ static int32_t q6asm_stream_callback(struct apr_device *adev,
 		client_event = ASM_CLIENT_EVENT_DATA_WRITE_DONE;
 		if (ac->io_mode & ASM_SYNC_IO_MODE) {
 			phys_addr_t phys;
-			int token = hdr->token & ASM_WRITE_TOKEN_MASK;
+			u32 token = hdr->token & ASM_WRITE_TOKEN_MASK;
 
 			guard(spinlock_irqsave)(&ac->lock);
 
 			port =  &ac->port[SNDRV_PCM_STREAM_PLAYBACK];
 
-			if (!port->buf) {
+			/* num_periods is 0 once the buffers are being freed */
+			if (!port->buf || !port->num_periods) {
 				ret = 0;
+				goto done;
+			}
+
+			if (token >= port->num_periods) {
+				dev_err_ratelimited(ac->dev, "Invalid write token %u\n",
+						    token);
+				ret = -EINVAL;
 				goto done;
 			}
 
@@ -694,8 +702,7 @@ static int32_t q6asm_stream_callback(struct apr_device *adev,
 
 			if (lower_32_bits(phys) != result->opcode ||
 			    upper_32_bits(phys) != result->status) {
-				dev_err(ac->dev, "Expected addr %pa\n",
-					&port->buf[token].phys);
+				dev_err(ac->dev, "Expected addr %pa\n", &phys);
 				ret = -EINVAL;
 				goto done;
 			}
@@ -706,27 +713,35 @@ static int32_t q6asm_stream_callback(struct apr_device *adev,
 		client_event = ASM_CLIENT_EVENT_DATA_READ_DONE;
 		if (ac->io_mode & ASM_SYNC_IO_MODE) {
 			struct asm_data_cmd_read_v2_done *done = data->payload;
+			u32 token = hdr->token;
 			phys_addr_t phys;
 
 			guard(spinlock_irqsave)(&ac->lock);
 			port =  &ac->port[SNDRV_PCM_STREAM_CAPTURE];
-			if (!port->buf) {
+			/* num_periods is 0 once the buffers are being freed */
+			if (!port->buf || !port->num_periods) {
 				ret = 0;
 				goto done;
 			}
 
-			phys = port->buf[hdr->token].phys;
-			atomic_set(&port->hw_ptr, hdr->token + 1);
+			if (token >= port->num_periods) {
+				dev_err_ratelimited(ac->dev, "Invalid read token %u\n",
+						    token);
+				ret = -EINVAL;
+				goto done;
+			}
+
+			phys = port->buf[token].phys;
 
 			if (upper_32_bits(phys) != done->buf_addr_msw ||
 			    lower_32_bits(phys) != done->buf_addr_lsw) {
 				dev_err(ac->dev, "Expected addr %pa %08x-%08x\n",
-					&port->buf[hdr->token].phys,
-					done->buf_addr_lsw,
+					&phys, done->buf_addr_lsw,
 					done->buf_addr_msw);
 				ret = -EINVAL;
 				goto done;
 			}
+			atomic_set(&port->hw_ptr, token + 1);
 		}
 
 		break;
