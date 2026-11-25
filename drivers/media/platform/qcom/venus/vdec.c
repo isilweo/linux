@@ -1347,10 +1347,12 @@ static void vdec_stop_streaming(struct vb2_queue *q)
 
 	mutex_lock(&inst->lock);
 
-	if (q->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+	if (q->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
 		ret = vdec_stop_capture(inst);
-	else
+		venus_helper_drop_delayed_bufs(inst);
+	} else {
 		ret = vdec_stop_output(inst);
+	}
 
 	venus_helper_buffers_done(inst, q->type, VB2_BUF_STATE_ERROR);
 
@@ -1420,6 +1422,7 @@ static void vdec_buf_cleanup(struct vb2_buffer *vb)
 	struct venus_buffer *buf = to_venus_buffer(vbuf);
 
 	mutex_lock(&inst->lock);
+	list_del_init(&buf->ref_list);
 	if (vb->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
 		if (!list_empty(&inst->registeredbufs))
 			list_del_init(&buf->reg_list);
@@ -1509,6 +1512,10 @@ static void vdec_buf_done(struct venus_inst *inst, unsigned int buf_type,
 			atomic_set(&inst->eos_last_pending, 1);
 		return;
 	}
+
+	/* a buffer held on delayed_process must not be sent any more */
+	if (type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+		atomic_set(&to_venus_buffer(vbuf)->delayed, 0);
 
 	vbuf->flags = flags;
 	vbuf->field = V4L2_FIELD_NONE;

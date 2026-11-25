@@ -345,6 +345,8 @@ struct venus_buffer {
 	struct list_head reg_list;
 	u32 flags;
 	struct list_head ref_list;
+	/* queued and not yet given back; the work sends only while set */
+	atomic_t delayed;
 };
 
 struct clock_data {
@@ -398,7 +400,9 @@ enum venus_inst_modes {
  * @dpbbufs:	a list of decoded picture buffers
  * @internalbufs:	a list of internal bufferes
  * @registeredbufs:	a list of registered capture bufferes
- * @delayed_process:	a list of delayed buffers
+ * @delayed_process:	capture buffers held back while the firmware has a
+ *			READONLY reference; an entry is sent only if
+ *			venus_buffer.delayed is still set
  * @delayed_process_work:	a work_struct for process delayed buffers
  * @nonblock:		nonblocking flag
  * @ctrl_handler:	v4l control handler
