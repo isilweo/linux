@@ -2098,7 +2098,7 @@ static int vcnl4000_probe(struct i2c_client *client)
 						      data->chip_spec->trig_buffer_func,
 						      data->chip_spec->buffer_setup_ops);
 		if (ret < 0)
-			return ret;
+			goto fail_poweroff;
 	}
 
 	if (client->irq && data->chip_spec->irq_thread) {
@@ -2109,11 +2109,11 @@ static int vcnl4000_probe(struct i2c_client *client)
 						"vcnl4000_irq",
 						indio_dev);
 		if (ret < 0)
-			return ret;
+			goto fail_poweroff;
 
 		ret = vcnl4010_probe_trigger(indio_dev);
 		if (ret < 0)
-			return ret;
+			goto fail_poweroff;
 	}
 
 	ret = pm_runtime_set_active(dev);
