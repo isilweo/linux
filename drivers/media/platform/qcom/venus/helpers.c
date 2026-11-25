@@ -1366,11 +1366,15 @@ static void delayed_process_buf_func(struct work_struct *work)
 		if (buf->flags & HFI_BUFFERFLAG_READONLY)
 			continue;
 
+		list_del_init(&buf->ref_list);
+
+		/* vdec_buf_done() has given it back meanwhile */
+		if (!atomic_xchg(&buf->delayed, 0))
+			continue;
+
 		ret = session_process_buf(inst, &buf->vb);
 		if (ret)
 			return_buf_error(inst, &buf->vb);
-
-		list_del_init(&buf->ref_list);
 	}
 unlock:
 	mutex_unlock(&inst->lock);
@@ -1397,6 +1401,26 @@ void venus_helper_acquire_buf_ref(struct vb2_v4l2_buffer *vbuf)
 	buf->flags |= HFI_BUFFERFLAG_READONLY;
 }
 EXPORT_SYMBOL_GPL(venus_helper_acquire_buf_ref);
+
+/**
+ * venus_helper_drop_delayed_bufs - unlink the capture buffers held back
+ * @inst: the instance, with inst->lock held
+ *
+ * For STREAMOFF of the capture queue, which gives every capture buffer
+ * back to userspace, also the ones waiting on delayed_process.
+ */
+void venus_helper_drop_delayed_bufs(struct venus_inst *inst)
+{
+	struct venus_buffer *buf, *n;
+
+	lockdep_assert_held(&inst->lock);
+
+	list_for_each_entry_safe(buf, n, &inst->delayed_process, ref_list) {
+		atomic_set(&buf->delayed, 0);
+		list_del_init(&buf->ref_list);
+	}
+}
+EXPORT_SYMBOL_GPL(venus_helper_drop_delayed_bufs);
 
 static int is_buf_refed(struct venus_inst *inst, struct vb2_v4l2_buffer *vbuf)
 {
@@ -1449,6 +1473,8 @@ int venus_helper_vb2_buf_init(struct vb2_buffer *vb)
 
 	buf->size = vb2_plane_size(vb, 0);
 	buf->dma_addr = vb2_dma_contig_plane_dma_addr(vb, 0);
+	INIT_LIST_HEAD(&buf->ref_list);
+	atomic_set(&buf->delayed, 0);
 
 	if (vb->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
 		list_add_tail(&buf->reg_list, &inst->registeredbufs);
@@ -1503,9 +1529,19 @@ void venus_helper_vb2_buf_queue(struct vb2_buffer *vb)
 {
 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
 	struct venus_inst *inst = vb2_get_drv_priv(vb->vb2_queue);
+	struct venus_buffer *buf = to_venus_buffer(vbuf);
 	struct v4l2_m2m_ctx *m2m_ctx = inst->m2m_ctx;
 	int ret;
 
+	/*
+	 * The node can still be linked: vdec_buf_done() may give back a
+	 * buffer held on delayed_process (e.g. as LAST at the end of a
+	 * drain) without taking inst->lock. Mark the buffer before it can
+	 * be found in the m2m queue, so that the mark of a buffer given
+	 * back at once stays cleared.
+	 */
+	list_del_init(&buf->ref_list);
+	atomic_set(&buf->delayed, 1);
 	v4l2_m2m_buf_queue(m2m_ctx, vbuf);
 
 	/* Skip processing queued capture buffers after LAST flag */
