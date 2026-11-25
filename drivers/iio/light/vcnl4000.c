@@ -2062,7 +2062,7 @@ static int vcnl4000_probe(struct i2c_client *client)
 		if (ret < 0) {
 			dev_err(&client->dev,
 				"unable to setup iio triggered buffer\n");
-			return ret;
+			goto fail_poweroff;
 		}
 	}
 
@@ -2075,12 +2075,12 @@ static int vcnl4000_probe(struct i2c_client *client)
 						indio_dev);
 		if (ret < 0) {
 			dev_err(&client->dev, "irq request failed\n");
-			return ret;
+			goto fail_poweroff;
 		}
 
 		ret = vcnl4010_probe_trigger(indio_dev);
 		if (ret < 0)
-			return ret;
+			goto fail_poweroff;
 	}
 
 	ret = pm_runtime_set_active(&client->dev);
