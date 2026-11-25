@@ -563,9 +563,12 @@ venc_encoder_cmd(struct file *file, void *fh, struct v4l2_encoder_cmd *cmd)
 		else
 			fdata.device_addr = 0xdeadb000;
 
-		ret = hfi_session_process_buf(inst, &fdata);
-
+		/* before sending, so that a quick LAST finds the state set */
 		inst->enc_state = VENUS_ENC_STATE_DRAIN;
+
+		ret = hfi_session_process_buf(inst, &fdata);
+		if (ret && inst->enc_state == VENUS_ENC_STATE_DRAIN)
+			inst->enc_state = VENUS_ENC_STATE_ENCODING;
 	} else if (cmd->cmd == V4L2_ENC_CMD_START) {
 		if (inst->enc_state == VENUS_ENC_STATE_DRAIN) {
 			ret = -EBUSY;
