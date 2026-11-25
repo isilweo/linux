@@ -227,6 +227,7 @@ struct vcnl4000_chip_spec {
 	const int num_als_it_times;
 	const unsigned int ulux_step;
 	const int prod_id;
+	unsigned int power_up_delay_us;
 };
 
 static int vcnl4000_set_power_state(struct vcnl4000_data *data, bool on)
@@ -1854,6 +1855,8 @@ static const struct vcnl4000_chip_spec vcnl4040_spec = {
 	.als_it_times = &vcnl4040_als_it_times,
 	.num_als_it_times = ARRAY_SIZE(vcnl4040_als_it_times),
 	.ulux_step = 100000,
+	/* Vishay application note 84307 */
+	.power_up_delay_us = 2500,
 	.prod_id = VCNL4040_PROD_ID,
 };
 
@@ -1873,6 +1876,8 @@ static const struct vcnl4000_chip_spec vcnl4200_spec = {
 	.als_it_times = &vcnl4200_als_it_times,
 	.num_als_it_times = ARRAY_SIZE(vcnl4200_als_it_times),
 	.ulux_step = 24000,
+	/* Vishay application note 84327 */
+	.power_up_delay_us = 2500,
 	.prod_id = VCNL4200_PROD_ID,
 };
 
@@ -1931,6 +1936,10 @@ static int vcnl4000_probe(struct i2c_client *client)
 					     regulator_names);
 	if (ret)
 		return ret;
+
+	/* Wait for the internal reset release and the oscillator start */
+	if (data->chip_spec->power_up_delay_us)
+		fsleep(data->chip_spec->power_up_delay_us);
 
 	ret = devm_mutex_init(dev, &data->vcnl4000_lock);
 	if (ret)
