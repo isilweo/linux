@@ -71,6 +71,9 @@ struct q6asm_dai_rtd {
 	uint32_t stream_id;
 	uint16_t session_id;
 	enum stream_state state;
+	bool pcm_mapped;
+	bool pcm_open;
+	bool pcm_routed;
 	uint32_t initial_samples_drop;
 	uint32_t trailing_samples_drop;
 	bool notify_on_drain;
@@ -203,6 +206,33 @@ static void event_handler(uint32_t opcode, uint32_t token,
 	}
 }
 
+/* STOP/EOS stops data transfer but leaves the ASM stream open. */
+static int q6asm_pcm_teardown(struct snd_pcm_substream *substream)
+{
+	struct q6asm_dai_rtd *prtd = substream->runtime->private_data;
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	int ret;
+
+	if (prtd->pcm_open) {
+		prtd->state = Q6ASM_STREAM_STOPPED;
+		ret = q6asm_cmd(prtd->audio_client, prtd->stream_id, CMD_CLOSE);
+		if (ret < 0)
+			return ret;
+		prtd->pcm_open = false;
+	}
+	if (prtd->pcm_routed) {
+		q6routing_stream_close(rtd->dai_link->id, substream->stream);
+		prtd->pcm_routed = false;
+	}
+	if (prtd->pcm_mapped) {
+		ret = q6asm_unmap_memory_regions(substream->stream, prtd->audio_client);
+		if (ret < 0)
+			return ret;
+		prtd->pcm_mapped = false;
+	}
+	return 0;
+}
+
 static int q6asm_dai_prepare(struct snd_soc_component *component,
 			     struct snd_pcm_substream *substream)
 {
@@ -224,16 +254,9 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
 	}
 
 	prtd->pcm_count = snd_pcm_lib_period_bytes(substream);
-	/* rate and channels are sent to audio driver */
-	if (prtd->state == Q6ASM_STREAM_RUNNING) {
-		/* clear the previous setup if any  */
-		q6asm_cmd(prtd->audio_client, prtd->stream_id, CMD_CLOSE);
-		q6asm_unmap_memory_regions(substream->stream,
-					   prtd->audio_client);
-		q6routing_stream_close(soc_prtd->dai_link->id,
-					 substream->stream);
-		prtd->state = Q6ASM_STREAM_STOPPED;
-	}
+	ret = q6asm_pcm_teardown(substream);
+	if (ret < 0)
+		return ret;
 
 	ret = q6asm_map_memory_regions(substream->stream, prtd->audio_client,
 				       prtd->phys,
@@ -243,8 +266,9 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
 	if (ret < 0) {
 		dev_err(dev, "Audio Start: Buffer Allocation failed rc = %d\n",
 							ret);
-		return -ENOMEM;
+		return ret;
 	}
+	prtd->pcm_mapped = true;
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		ret = q6asm_open_write(prtd->audio_client, prtd->stream_id,
@@ -257,17 +281,21 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
 	}
 
 	if (ret < 0) {
-		dev_err(dev, "%s: q6asm_open_write failed\n", __func__);
-		goto open_err;
+		dev_err(dev, "PCM %s open failed: %d\n",
+			substream->stream == SNDRV_PCM_STREAM_PLAYBACK ?
+			"playback" : "capture", ret);
+		goto teardown;
 	}
 
+	prtd->pcm_open = true;
 	prtd->session_id = q6asm_get_session_id(prtd->audio_client);
 	ret = q6routing_stream_open(soc_prtd->dai_link->id, LEGACY_PCM_MODE,
 			      prtd->session_id, substream->stream);
 	if (ret) {
 		dev_err(dev, "%s: stream reg failed ret:%d\n", __func__, ret);
-		goto routing_err;
+		goto teardown;
 	}
+	prtd->pcm_routed = true;
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		ret = q6asm_media_format_block_multi_ch_pcm(
@@ -280,26 +308,25 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
 							   runtime->rate,
 							   runtime->channels,
 							   prtd->bits_per_sample);
-
-		/* Queue the buffers */
-		for (i = 0; i < runtime->periods; i++)
-			q6asm_read(prtd->audio_client, prtd->stream_id);
-
 	}
-	if (ret < 0)
-		dev_info(dev, "%s: CMD Format block failed\n", __func__);
-	else
-		prtd->state = Q6ASM_STREAM_RUNNING;
+	if (ret < 0) {
+		dev_err(dev, "PCM format block failed: %d\n", ret);
+		goto teardown;
+	}
 
-	return ret;
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
+		for (i = 0; i < runtime->periods; i++) {
+			ret = q6asm_read(prtd->audio_client, prtd->stream_id);
+			if (ret < 0)
+				goto teardown;
+		}
+	}
+	prtd->state = Q6ASM_STREAM_RUNNING;
+	return 0;
 
-routing_err:
-	q6asm_cmd(prtd->audio_client, prtd->stream_id,  CMD_CLOSE);
-open_err:
-	q6asm_unmap_memory_regions(substream->stream, prtd->audio_client);
-	q6asm_audio_client_free(prtd->audio_client);
-	prtd->audio_client = NULL;
-
+teardown:
+	if (q6asm_pcm_teardown(substream) < 0)
+		dev_err(dev, "PCM setup cleanup failed\n");
 	return ret;
 }
 
@@ -455,19 +482,17 @@ static int q6asm_dai_close(struct snd_soc_component *component,
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct snd_soc_pcm_runtime *soc_prtd = snd_soc_substream_to_rtd(substream);
 	struct q6asm_dai_rtd *prtd = runtime->private_data;
+	int ret;
 
-	if (prtd->audio_client) {
-		if (prtd->state)
-			q6asm_cmd(prtd->audio_client, prtd->stream_id,
-				  CMD_CLOSE);
-
-		q6asm_unmap_memory_regions(substream->stream,
-					   prtd->audio_client);
-		q6asm_audio_client_free(prtd->audio_client);
-		prtd->audio_client = NULL;
+	ret = q6asm_pcm_teardown(substream);
+	if (ret < 0) {
+		dev_err(component->dev, "PCM final teardown failed: %d\n", ret);
+		if (prtd->pcm_open && prtd->pcm_mapped)
+			q6asm_unmap_memory_regions(substream->stream, prtd->audio_client);
+		if (prtd->pcm_routed)
+			q6routing_stream_close(soc_prtd->dai_link->id, substream->stream);
 	}
-	q6routing_stream_close(soc_prtd->dai_link->id,
-						substream->stream);
+	q6asm_audio_client_free(prtd->audio_client);
 	kfree(prtd);
 	return 0;
 }
