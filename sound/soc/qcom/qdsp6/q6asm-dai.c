@@ -179,11 +179,32 @@ static const struct snd_compr_codec_caps q6asm_compr_caps = {
 	.descriptor[0].formats = 0,
 };
 
+/*
+ * Requeue a capture read only while ALSA runs the stream. PAUSE and SUSPEND
+ * resume without a prepare that would queue the reads again, so they keep
+ * the reads in circulation. Called under the PCM stream lock.
+ */
+static bool q6asm_dai_requeue_read(struct snd_pcm_runtime *runtime)
+{
+	snd_pcm_state_t state;
+
+	if (!runtime)
+		return false;
+
+	state = runtime->state;
+	if (state == SNDRV_PCM_STATE_SUSPENDED)
+		state = runtime->suspended_state;
+
+	return state == SNDRV_PCM_STATE_RUNNING ||
+	       state == SNDRV_PCM_STATE_PAUSED;
+}
+
 static void event_handler(uint32_t opcode, uint32_t token,
 			  void *payload, void *priv)
 {
 	struct q6asm_dai_rtd *prtd = priv;
 	struct snd_pcm_substream *substream = prtd->substream;
+	unsigned long flags;
 
 	switch (opcode) {
 	case ASM_CLIENT_EVENT_CMD_RUN_DONE:
@@ -195,10 +216,12 @@ static void event_handler(uint32_t opcode, uint32_t token,
 		break;
 		}
 	case ASM_CLIENT_EVENT_DATA_READ_DONE:
-		snd_pcm_period_elapsed(substream);
-		if (prtd->state == Q6ASM_STREAM_RUNNING)
+		snd_pcm_stream_lock_irqsave(substream, flags);
+		snd_pcm_period_elapsed_under_stream_lock(substream);
+		if (prtd->state == Q6ASM_STREAM_RUNNING &&
+		    q6asm_dai_requeue_read(substream->runtime))
 			q6asm_read(prtd->audio_client, prtd->stream_id);
-
+		snd_pcm_stream_unlock_irqrestore(substream, flags);
 		break;
 	default:
 		break;
