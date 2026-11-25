@@ -872,9 +872,14 @@ out_unlock:
 	return ret;
 }
 
+/*
+ * The event period is the number of samples in a row that must cross the
+ * threshold (PS_PERS) times the sample period.
+ */
 static ssize_t vcnl4040_read_ps_period(struct vcnl4000_data *data, int *val, int *val2)
 {
-	int ret, ret_pers, it;
+	int ret, ret_pers;
+	u32 period_us;
 
 	ret = i2c_smbus_read_word_data(data->client, VCNL4200_PS_CONF1);
 	if (ret < 0)
@@ -884,45 +889,47 @@ static ssize_t vcnl4040_read_ps_period(struct vcnl4000_data *data, int *val, int
 	if (ret_pers >= ARRAY_SIZE(vcnl4040_ps_persistence))
 		return -EINVAL;
 
-	it = FIELD_GET(VCNL4040_PS_CONF2_PS_IT, ret);
-	if (it >= data->chip_spec->num_ps_it_times)
+	if (FIELD_GET(VCNL4040_PS_CONF2_PS_IT, ret) >=
+	    data->chip_spec->num_ps_it_times)
 		return -EINVAL;
 
-	*val = (*data->chip_spec->ps_it_times)[it][0];
-	*val2 = (*data->chip_spec->ps_it_times)[it][1] *
-		vcnl4040_ps_persistence[ret_pers];
+	period_us = vcnl4040_ps_period_us(data, ret) *
+		    vcnl4040_ps_persistence[ret_pers];
+	*val = period_us / MICRO;
+	*val2 = period_us % MICRO;
 
 	return IIO_VAL_INT_PLUS_MICRO;
 }
 
 static ssize_t vcnl4040_write_ps_period(struct vcnl4000_data *data, int val, int val2)
 {
-	int ret, it, i;
+	u64 val_us;
+	u32 period_us;
+	int ret, i;
 	u16 regval;
 
-	ret = i2c_smbus_read_word_data(data->client, VCNL4200_PS_CONF1);
-	if (ret < 0)
-		return ret;
-
-	it = FIELD_GET(VCNL4040_PS_CONF2_PS_IT, ret);
-	if (it >= data->chip_spec->num_ps_it_times)
+	if (val < 0 || val2 < 0)
 		return -EINVAL;
+	val_us = mul_u32_u32(val, MICRO) + val2;
 
-	if (val > 0)
-		i = ARRAY_SIZE(vcnl4040_ps_persistence) - 1;
-	else {
-		for (i = 0; i < ARRAY_SIZE(vcnl4040_ps_persistence) - 1; i++) {
-			if (val2 <= vcnl4040_ps_persistence[i] *
-					(*data->chip_spec->ps_it_times)[it][1])
-				break;
-		}
-	}
-
+	/* The integration time must not change until PS_PERS is written */
 	mutex_lock(&data->vcnl4000_lock);
 
 	ret = i2c_smbus_read_word_data(data->client, VCNL4200_PS_CONF1);
 	if (ret < 0)
 		goto out_unlock;
+
+	if (FIELD_GET(VCNL4040_PS_CONF2_PS_IT, ret) >=
+	    data->chip_spec->num_ps_it_times) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	period_us = vcnl4040_ps_period_us(data, ret);
+	for (i = 0; i < ARRAY_SIZE(vcnl4040_ps_persistence) - 1; i++) {
+		if (val_us <= (u64)vcnl4040_ps_persistence[i] * period_us)
+			break;
+	}
 
 	regval = FIELD_PREP(VCNL4040_CONF1_PS_PERS, i);
 	regval |= (ret & ~VCNL4040_CONF1_PS_PERS);
