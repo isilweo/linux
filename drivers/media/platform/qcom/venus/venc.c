@@ -1298,6 +1298,11 @@ static int venc_start_streaming(struct vb2_queue *q, unsigned int count)
 	inst->sequence_cap = 0;
 	inst->sequence_out = 0;
 
+	/*
+	 * Held while both queues stream, until venc_stop_streaming(): on
+	 * MSM8953 cutting the clocks under a live session, by autosuspend
+	 * or before a command, hangs the SoC.
+	 */
 	ret = venc_pm_get(inst);
 	if (ret)
 		goto error;
@@ -1306,26 +1311,22 @@ static int venc_start_streaming(struct vb2_queue *q, unsigned int count)
 	if (ret)
 		goto put_power;
 
-	ret = venc_pm_put(inst, true);
-	if (ret)
-		goto error;
-
 	ret = venc_set_properties(inst);
 	if (ret)
-		goto error;
+		goto put_power;
 
 	ret = venc_verify_conf(inst);
 	if (ret)
-		goto error;
+		goto put_power;
 
 	ret = venus_helper_set_num_bufs(inst, inst->num_input_bufs,
 					inst->num_output_bufs, 0);
 	if (ret)
-		goto error;
+		goto put_power;
 
 	ret = venus_helper_vb2_start_streaming(inst);
 	if (ret)
-		goto error;
+		goto put_power;
 
 	inst->enc_state = VENUS_ENC_STATE_ENCODING;
 
@@ -1367,13 +1368,26 @@ static void venc_vb2_buf_queue(struct vb2_buffer *vb)
 	mutex_unlock(&inst->lock);
 }
 
+static void venc_stop_streaming(struct vb2_queue *q)
+{
+	struct venus_inst *inst = vb2_get_drv_priv(q);
+	/* streamon_* only change in queue ops (ctx_q_lock) or the last close */
+	bool live = inst->streamon_out && inst->streamon_cap;
+
+	venus_helper_vb2_stop_streaming(q);
+
+	/* the session is gone, drop the reference venc_start_streaming() took */
+	if (live)
+		venc_pm_put(inst, true);
+}
+
 static const struct vb2_ops venc_vb2_ops = {
 	.queue_setup = venc_queue_setup,
 	.buf_init = venc_buf_init,
 	.buf_cleanup = venc_buf_cleanup,
 	.buf_prepare = venus_helper_vb2_buf_prepare,
 	.start_streaming = venc_start_streaming,
-	.stop_streaming = venus_helper_vb2_stop_streaming,
+	.stop_streaming = venc_stop_streaming,
 	.buf_queue = venc_vb2_buf_queue,
 };
 
