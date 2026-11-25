@@ -373,6 +373,9 @@ int q6routing_stream_open(int fedai_id, int perf_mode,
 	}
 
 	session = &routing_data->sessions[stream_id - 1];
+	dev_dbg(routing_data->dev,
+		"route open fe=%d session=%d dir=%d port=%d\n",
+		fedai_id, stream_id, stream_type, session->port_id);
 	if (session->port_id < 0) {
 		dev_err(routing_data->dev, "Routing not setup for MultiMedia%d Session\n",
 			session->fedai_id);
