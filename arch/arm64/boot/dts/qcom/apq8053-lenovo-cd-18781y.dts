@@ -183,7 +183,7 @@
 	status = "okay";
 
 	qca9379_bt: bluetooth {
-		compatible = "qcom-qca9379-bt", "qcom,qca6174-bt";
+		compatible = "qcom,qca9379-bt", "qcom,qca6174-bt";
 		enable-gpios = <&tlmm 76 GPIO_ACTIVE_HIGH>;
 		clocks = <&sleep_clk>;
 	};
