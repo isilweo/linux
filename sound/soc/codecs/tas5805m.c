@@ -4,6 +4,7 @@
 //
 // Author: Andy Liu <andy-liu@ti.com>
 // Author: Daniel Beer <daniel.beer@igorinstitute.com>
+// Author: Felix Kaechele <felix@kaechele.ca> - TAS5782M support
 //
 // This is based on a driver originally written by Andy Liu at TI and
 // posted here:
@@ -58,6 +59,23 @@
 #define DCTRL2_MUTE		0x08
 #define DCTRL2_DIS_DSP		0x10
 
+/* TAS5782M (Lenovo ThinkSmart View); the datasheet numbers registers without names */
+#define TAS5782M_REG_RESET		0x01
+#define TAS5782M_REG_POWER		0x02
+#define TAS5782M_REG_MUTE		0x03
+#define TAS5782M_REG_PLL_REF		0x0d
+#define TAS5782M_REG_ERR_DETECT		0x25
+#define TAS5782M_REG_DAC_ROUTING	0x2a
+
+#define TAS5782M_RESET_REGISTERS	0x01
+#define TAS5782M_RESET_MODULES		0x10
+#define TAS5782M_POWER_ON		0x00
+#define TAS5782M_POWER_DOWN		0x01
+#define TAS5782M_POWER_STANDBY		0x10
+#define TAS5782M_MUTE_LR		0x11
+#define TAS5782M_PLL_REF_SCLK		0x10
+#define TAS5782M_IGNORE_MCLK		0x18	/* ignore MCLK detection and MCLK halt */
+
 /* This sequence of register writes must always be sent, prior to the
  * 5ms delay while we wait for the DSP to boot.
  */
@@ -65,6 +83,43 @@ static const uint8_t dsp_cfg_preboot[] = {
 	0x00, 0x00, 0x7f, 0x00, 0x03, 0x02, 0x01, 0x11,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x7f, 0x00, 0x03, 0x02,
+};
+
+static const u8 tas5782m_preboot[] = {
+	REG_PAGE, 0x00,
+	REG_BOOK, 0x00,
+	TAS5782M_REG_POWER, TAS5782M_POWER_DOWN | TAS5782M_POWER_STANDBY,
+	TAS5782M_REG_RESET, TAS5782M_RESET_REGISTERS | TAS5782M_RESET_MODULES,
+	0x00, 0x00,
+	0x00, 0x00,
+	0x00, 0x00,
+	0x00, 0x00,
+	TAS5782M_REG_MUTE, TAS5782M_MUTE_LR,
+	TAS5782M_REG_DAC_ROUTING, 0x00,		/* DAC data path muted */
+	TAS5782M_REG_ERR_DETECT, TAS5782M_IGNORE_MCLK,
+	TAS5782M_REG_PLL_REF, TAS5782M_PLL_REF_SCLK,
+	TAS5782M_REG_POWER, TAS5782M_POWER_ON,
+};
+
+struct tas5805m_chip {
+	bool is_tas5782m;
+	const char *fw_prefix;
+	const u8 *preboot;
+	unsigned int preboot_len;
+};
+
+static const struct tas5805m_chip tas5805m_chip = {
+	.fw_prefix = "tas5805m",
+	.preboot = dsp_cfg_preboot,
+	.preboot_len = ARRAY_SIZE(dsp_cfg_preboot),
+};
+
+static const struct tas5805m_chip tas5782m_chip = {
+	.is_tas5782m = true,
+	/* sic: this is the file name in postmarketOS firmware-qcom-msm8953 */
+	.fw_prefix = "tas5728m",
+	.preboot = tas5782m_preboot,
+	.preboot_len = ARRAY_SIZE(tas5782m_preboot),
 };
 
 static const uint32_t tas5805m_volume[] = {
@@ -154,6 +209,7 @@ static const uint32_t tas5805m_volume[] = {
 #define TAS5805M_VOLUME_MIN	0
 
 struct tas5805m_priv {
+	const struct tas5805m_chip	*chip;
 	struct i2c_client		*i2c;
 	struct regulator		*pvdd;
 	struct gpio_desc		*gpio_pdn_n;
@@ -207,9 +263,13 @@ static void tas5805m_refresh(struct tas5805m_priv *tas5805m)
 	regmap_write(rm, REG_BOOK, 0x00);
 
 	/* Set/clear digital soft-mute */
-	regmap_write(rm, REG_DEVICE_CTRL_2,
-		(tas5805m->is_muted ? DCTRL2_MUTE : 0) |
-		DCTRL2_MODE_PLAY);
+	if (tas5805m->chip->is_tas5782m)
+		regmap_write(rm, TAS5782M_REG_MUTE,
+			     tas5805m->is_muted ? TAS5782M_MUTE_LR : 0);
+	else
+		regmap_write(rm, REG_DEVICE_CTRL_2,
+			     (tas5805m->is_muted ? DCTRL2_MUTE : 0) |
+			     DCTRL2_MODE_PLAY);
 }
 
 static int tas5805m_vol_info(struct snd_kcontrol *kcontrol,
@@ -339,7 +399,7 @@ static void do_work(struct work_struct *work)
 	 * allow the DSP to boot before configuring it.
 	 */
 	usleep_range(5000, 10000);
-	send_cfg(rm, dsp_cfg_preboot, ARRAY_SIZE(dsp_cfg_preboot));
+	send_cfg(rm, tas5805m->chip->preboot, tas5805m->chip->preboot_len);
 	usleep_range(5000, 15000);
 	send_cfg(rm, tas5805m->dsp_cfg_data, tas5805m->dsp_cfg_len);
 
@@ -369,6 +429,13 @@ static int tas5805m_dac_event(struct snd_soc_dapm_widget *w,
 			regmap_write(rm, REG_PAGE, 0x00);
 			regmap_write(rm, REG_BOOK, 0x00);
 
+			/* TAS5782M fault registers are not documented */
+			if (tas5805m->chip->is_tas5782m) {
+				regmap_write(rm, TAS5782M_REG_POWER,
+					     TAS5782M_POWER_STANDBY);
+				goto unlock;
+			}
+
 			regmap_read(rm, REG_CHAN_FAULT, &chan);
 			regmap_read(rm, REG_GLOBAL_FAULT1, &global1);
 			regmap_read(rm, REG_GLOBAL_FAULT2, &global2);
@@ -379,6 +446,7 @@ static int tas5805m_dac_event(struct snd_soc_dapm_widget *w,
 
 			regmap_write(rm, REG_DEVICE_CTRL_2, DCTRL2_MODE_HIZ);
 		}
+unlock:
 		mutex_unlock(&tas5805m->lock);
 	}
 
@@ -476,6 +544,10 @@ static int tas5805m_i2c_probe(struct i2c_client *i2c)
 	if (!tas5805m)
 		return -ENOMEM;
 
+	tas5805m->chip = i2c_get_match_data(i2c);
+	if (!tas5805m->chip)
+		return -ENODEV;
+
 	tas5805m->i2c = i2c;
 	tas5805m->pvdd = devm_regulator_get(dev, "pvdd");
 	if (IS_ERR(tas5805m->pvdd)) {
@@ -505,8 +577,8 @@ static int tas5805m_i2c_probe(struct i2c_client *i2c)
 					&config_name))
 		config_name = "default";
 
-	snprintf(filename, sizeof(filename), "tas5805m_dsp_%s.bin",
-		 config_name);
+	snprintf(filename, sizeof(filename), "%s_dsp_%s.bin",
+		 tas5805m->chip->fw_prefix, config_name);
 	ret = request_firmware(&fw, filename, dev);
 	if (ret)
 		return ret;
@@ -580,14 +652,16 @@ static void tas5805m_i2c_remove(struct i2c_client *i2c)
 }
 
 static const struct i2c_device_id tas5805m_i2c_id[] = {
-	{ "tas5805m", },
+	{ "tas5805m", (kernel_ulong_t)&tas5805m_chip },
+	{ "tas5782m", (kernel_ulong_t)&tas5782m_chip },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, tas5805m_i2c_id);
 
 #if IS_ENABLED(CONFIG_OF)
 static const struct of_device_id tas5805m_of_match[] = {
-	{ .compatible = "ti,tas5805m", },
+	{ .compatible = "ti,tas5805m", .data = &tas5805m_chip },
+	{ .compatible = "ti,tas5782m", .data = &tas5782m_chip },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, tas5805m_of_match);
@@ -607,5 +681,5 @@ module_i2c_driver(tas5805m_i2c_driver);
 
 MODULE_AUTHOR("Andy Liu <andy-liu@ti.com>");
 MODULE_AUTHOR("Daniel Beer <daniel.beer@igorinstitute.com>");
-MODULE_DESCRIPTION("TAS5805M Audio Amplifier Driver");
+MODULE_DESCRIPTION("TAS5782M/TAS5805M Audio Amplifier Driver");
 MODULE_LICENSE("GPL v2");
