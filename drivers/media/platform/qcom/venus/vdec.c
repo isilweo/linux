@@ -1847,7 +1847,11 @@ static int vdec_close(struct file *file)
 	struct venus_inst *inst = to_inst(file);
 
 	vdec_pm_get(inst);
-	cancel_work_sync(&inst->delayed_process_work);
+	/*
+	 * Tearing the session down below makes the firmware release buffer
+	 * references, which would queue the work again; keep it off.
+	 */
+	disable_work_sync(&inst->delayed_process_work);
 	venus_close_common(inst, file);
 	ida_destroy(&inst->dpb_ids);
 	vdec_pm_put(inst, false);
