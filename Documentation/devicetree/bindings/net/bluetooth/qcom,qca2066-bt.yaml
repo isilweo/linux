@@ -12,9 +12,13 @@ maintainers:
 
 properties:
   compatible:
-    enum:
-      - qcom,qca2066-bt
-      - qcom,qca6174-bt
+    oneOf:
+      - enum:
+          - qcom,qca2066-bt
+          - qcom,qca6174-bt
+      - items:
+          - const: qcom,qca9379-bt
+          - const: qcom,qca6174-bt
 
   clocks:
     items:
