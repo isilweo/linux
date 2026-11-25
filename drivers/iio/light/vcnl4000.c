@@ -329,12 +329,21 @@ out:
 	return ret;
 }
 
+/* While a threshold event is enabled, a runtime PM reference is held */
+static bool vcnl4040_events_enabled(struct vcnl4000_data *data)
+{
+	return data->ps_int || data->als_int;
+}
+
 static int vcnl4200_set_power_state(struct vcnl4000_data *data, bool on)
 {
 	int ret;
 
-	/* Do not power down if interrupts are enabled */
-	if (!on && (data->ps_int || data->als_int))
+	/*
+	 * Do not power down if interrupts are enabled. Runtime suspend does
+	 * not happen then, but system sleep forces it.
+	 */
+	if (!on && vcnl4040_events_enabled(data))
 		return 0;
 
 	ret = vcnl4000_write_als_enable(data, on);
@@ -408,9 +417,28 @@ static int vcnl4200_init(struct vcnl4000_data *data)
 	if (ret < 0)
 		return ret;
 
-	regval = ret | VCNL4040_PS_CONF2_PS_HD;
+	/*
+	 * Start with the interrupts disabled. The sensor keeps its registers
+	 * as long as it stays powered, also across a driver rebind, and
+	 * ps_int and als_int must match what is enabled in the chip.
+	 */
+	regval = (ret | VCNL4040_PS_CONF2_PS_HD) & ~VCNL4040_PS_CONF2_PS_INT;
 	ret = i2c_smbus_write_word_data(data->client, VCNL4200_PS_CONF1,
 					regval);
+	if (ret < 0)
+		return ret;
+
+	ret = i2c_smbus_read_word_data(data->client, VCNL4200_AL_CONF);
+	if (ret < 0)
+		return ret;
+
+	ret = i2c_smbus_write_word_data(data->client, VCNL4200_AL_CONF,
+					ret & ~VCNL4040_ALS_CONF_INT_EN);
+	if (ret < 0)
+		return ret;
+
+	/* Reading the flags releases an INT line left asserted */
+	ret = i2c_smbus_read_word_data(data->client, data->chip_spec->int_reg);
 	if (ret < 0)
 		return ret;
 
@@ -1469,15 +1497,11 @@ static int vcnl4040_read_event_config(struct iio_dev *indio_dev,
 		if (ret < 0)
 			return ret;
 
-		data->als_int = FIELD_GET(VCNL4040_ALS_CONF_INT_EN, ret);
-
-		return data->als_int;
+		return FIELD_GET(VCNL4040_ALS_CONF_INT_EN, ret);
 	case IIO_PROXIMITY:
 		ret = i2c_smbus_read_word_data(data->client, VCNL4200_PS_CONF1);
 		if (ret < 0)
 			return ret;
-
-		data->ps_int = FIELD_GET(VCNL4040_PS_CONF2_PS_INT, ret);
 
 		return (dir == IIO_EV_DIR_RISING) ?
 			FIELD_GET(VCNL4040_PS_IF_AWAY, ret) :
@@ -1495,9 +1519,24 @@ static int vcnl4040_write_event_config(struct iio_dev *indio_dev,
 {
 	int ret = -EINVAL;
 	u16 val, mask;
+	bool was_enabled, enabled;
 	struct vcnl4000_data *data = iio_priv(indio_dev);
 
+	/*
+	 * Keep the device runtime resumed, and so measuring, while any
+	 * threshold event is enabled. Take the reference before changing
+	 * the configuration so that the sensor is powered on when the
+	 * first event is enabled.
+	 */
+	if (state) {
+		ret = vcnl4000_set_pm_runtime_state(data, true);
+		if (ret < 0)
+			return ret;
+	}
+
 	mutex_lock(&data->vcnl4000_lock);
+
+	was_enabled = vcnl4040_events_enabled(data);
 
 	switch (chan->type) {
 	case IIO_LIGHT:
@@ -1511,9 +1550,10 @@ static int vcnl4040_write_event_config(struct iio_dev *indio_dev,
 		else
 			val = (ret & ~mask);
 
-		data->als_int = FIELD_GET(VCNL4040_ALS_CONF_INT_EN, val);
 		ret = i2c_smbus_write_word_data(data->client, VCNL4200_AL_CONF,
 						val);
+		if (!ret)
+			data->als_int = FIELD_GET(VCNL4040_ALS_CONF_INT_EN, val);
 		break;
 	case IIO_PROXIMITY:
 		ret = i2c_smbus_read_word_data(data->client, VCNL4200_PS_CONF1);
@@ -1527,16 +1567,27 @@ static int vcnl4040_write_event_config(struct iio_dev *indio_dev,
 
 		val = state ? (ret | mask) : (ret & ~mask);
 
-		data->ps_int = FIELD_GET(VCNL4040_PS_CONF2_PS_INT, val);
 		ret = i2c_smbus_write_word_data(data->client, VCNL4200_PS_CONF1,
 						val);
+		if (!ret)
+			data->ps_int = FIELD_GET(VCNL4040_PS_CONF2_PS_INT, val);
 		break;
 	default:
+		ret = -EINVAL;
 		break;
 	}
 
 out:
+	enabled = vcnl4040_events_enabled(data);
 	mutex_unlock(&data->vcnl4000_lock);
+
+	/* Not the first event, or the write failed: drop the extra reference */
+	if (state && (was_enabled || !enabled))
+		vcnl4000_set_pm_runtime_state(data, false);
+
+	/* The last event was disabled: drop the held reference */
+	if (!state && was_enabled && !enabled)
+		vcnl4000_set_pm_runtime_state(data, false);
 
 	return ret;
 }
@@ -2084,6 +2135,13 @@ static void vcnl4000_remove(struct i2c_client *client)
 	pm_runtime_dont_use_autosuspend(&client->dev);
 	pm_runtime_disable(&client->dev);
 	iio_device_unregister(indio_dev);
+
+	/* Drop the reference held for enabled threshold events */
+	if (vcnl4040_events_enabled(data)) {
+		data->ps_int = 0;
+		data->als_int = 0;
+		pm_runtime_put_noidle(&client->dev);
+	}
 	pm_runtime_set_suspended(&client->dev);
 
 	ret = data->chip_spec->set_power_state(data, false);
