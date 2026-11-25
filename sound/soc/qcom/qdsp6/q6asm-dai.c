@@ -329,15 +329,22 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
 							   runtime->rate,
 							   runtime->channels,
 							   prtd->bits_per_sample);
-
-		/* Queue the buffers */
-		for (i = 0; i < runtime->periods; i++)
-			q6asm_read(prtd->audio_client, prtd->stream_id);
-
 	}
 	if (ret < 0) {
 		dev_err(dev, "%s: CMD Format block failed\n", __func__);
 		goto err;
+	}
+
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
+		/* Queue the buffers */
+		for (i = 0; i < runtime->periods; i++) {
+			ret = q6asm_read(prtd->audio_client, prtd->stream_id);
+			if (ret < 0) {
+				dev_err(dev, "%s: queuing capture buffer %d failed: %d\n",
+					__func__, i, ret);
+				goto err;
+			}
+		}
 	}
 
 	prtd->state = Q6ASM_STREAM_RUNNING;
