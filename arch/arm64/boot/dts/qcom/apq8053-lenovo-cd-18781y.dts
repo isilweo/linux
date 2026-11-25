@@ -563,6 +563,7 @@
 	vqmmc-supply = <&pm8953_l12>;
 
 	mmc-pwrseq = <&wlan_pwrseq>;
+	cap-power-off-card;
 	non-removable;
 	wakeup-source;
 	/* Some devices experience dropouts of the WiFi module at the default of
