@@ -886,6 +886,7 @@ static int q6asm_ac_send_cmd_sync(struct audio_client *ac, struct apr_pkt *pkt)
 	ac->result.opcode = 0;
 	ac->result.status = 0;
 
+	dev_dbg(ac->dev, "ASM send port=%#x op=%#x\n", hdr->dest_port, hdr->opcode);
 	rc = apr_send_pkt(ac->adev, pkt);
 	if (rc < 0)
 		goto err;
@@ -908,6 +909,7 @@ static int q6asm_ac_send_cmd_sync(struct audio_client *ac, struct apr_pkt *pkt)
 
 
 err:
+	dev_dbg(ac->dev, "ASM done port=%#x op=%#x rc=%d\n", hdr->dest_port, hdr->opcode, rc);
 	mutex_unlock(&ac->cmd_lock);
 	return rc;
 }

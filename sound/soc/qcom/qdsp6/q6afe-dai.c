@@ -373,6 +373,7 @@ static void q6afe_dai_shutdown(struct snd_pcm_substream *substream,
 	struct q6afe_dai_data *dai_data = dev_get_drvdata(dai->dev);
 	int rc;
 
+	dev_dbg(dai->dev, "AFE shutdown %s started=%d\n", dai->name, dai_data->is_port_started[dai->id]);
 	if (!dai_data->is_port_started[dai->id])
 		return;
 
@@ -390,6 +391,7 @@ static int q6afe_dai_prepare(struct snd_pcm_substream *substream,
 	struct q6afe_dai_data *dai_data = dev_get_drvdata(dai->dev);
 	int rc;
 
+	dev_dbg(dai->dev, "AFE prepare %s started=%d\n", dai->name, dai_data->is_port_started[dai->id]);
 	if (dai_data->is_port_started[dai->id]) {
 		/* stop the port and restart with new port config */
 		rc = q6afe_port_stop(dai_data->port[dai->id]);
