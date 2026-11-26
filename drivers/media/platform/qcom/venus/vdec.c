@@ -1234,7 +1234,9 @@ static int vdec_start_output(struct venus_inst *inst)
 	inst->codec_state = VENUS_DEC_STATE_INIT;
 
 done:
-	inst->streamon_out = 1;
+	/* only a started queue holds the reference, see vdec_start_streaming() */
+	if (!ret)
+		inst->streamon_out = 1;
 	return ret;
 }
 
@@ -1247,7 +1249,14 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 
 	if (q->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
 		ret = vdec_start_capture(inst);
+		if (ret)
+			goto error;
 	} else {
+		/*
+		 * Held while OUTPUT streams, until vdec_stop_streaming(): on
+		 * MSM8953 cutting the clocks while the firmware holds input,
+		 * e.g. waiting for CAPTURE after the header, hangs the SoC.
+		 */
 		ret = vdec_pm_get(inst);
 		if (ret)
 			goto error;
@@ -1256,15 +1265,10 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 		if (ret)
 			goto put_power;
 
-		ret = vdec_pm_put(inst, true);
-		if (ret)
-			goto error;
-
 		ret = vdec_start_output(inst);
+		if (ret)
+			goto put_power;
 	}
-
-	if (ret)
-		goto error;
 
 	mutex_unlock(&inst->lock);
 	return 0;
@@ -1358,16 +1362,19 @@ static void vdec_stop_streaming(struct vb2_queue *q)
 
 	inst->session_error = 0;
 
-	if (ret)
-		goto unlock;
-
+	/*
+	 * OUTPUT is stopped also when the flush failed (vb2 stops a queue
+	 * only once), and its reference goes below; CAPTURE as before.
+	 */
 	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 		inst->streamon_out = 0;
-	else
+	else if (!ret)
 		inst->streamon_cap = 0;
 
-unlock:
 	mutex_unlock(&inst->lock);
+
+	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
+		vdec_pm_put(inst, true);
 }
 
 static void vdec_session_release(struct venus_inst *inst)
