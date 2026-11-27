@@ -42,15 +42,14 @@
 		};
 
 		/*
-		 * There currently isn't a good way to model a binary microphone mute
-		 * switch. It is a hardware mute switch though, so mics will be muted
-		 * even though it is not reflected in UI.
+		 * Hardware mute switch: it cuts both DMICs. Report it as
+		 * SW_MUTE_DEVICE, set while the microphones are muted.
 		 */
-		mic-mute-swtich {
+		mic-mute-switch {
 			label = "Mic Mute";
-			gpios = <&tlmm 86 GPIO_ACTIVE_LOW>;
+			gpios = <&tlmm 86 GPIO_ACTIVE_HIGH>;
 			linux,input-type = <EV_SW>;
-			linux,code = <SW_MICROPHONE_INSERT>;
+			linux,code = <SW_MUTE_DEVICE>;
 		};
 
 		volume-up-key {
