@@ -1782,6 +1782,28 @@ static struct msm_gpu *a5xx_gpu_init(struct drm_device *dev)
 	return gpu;
 }
 
+static bool a5xx_progress(struct msm_gpu *gpu, struct msm_ringbuffer *ring)
+{
+	struct msm_cp_state cp_state = {
+		.ib1_base = gpu_read64(gpu, REG_A5XX_CP_IB1_BASE),
+		.ib2_base = gpu_read64(gpu, REG_A5XX_CP_IB2_BASE),
+		.ib1_rem  = gpu_read(gpu, REG_A5XX_CP_IB1_BUFSZ),
+		.ib2_rem  = gpu_read(gpu, REG_A5XX_CP_IB2_BUFSZ),
+	};
+	bool progress;
+
+	/*
+	 * Like a6xx_progress(): we only want to know whether the CP moved
+	 * since the last check, not where exactly it is, so the prefetch
+	 * that BUFSZ does not account for does not matter here.
+	 */
+	progress = !!memcmp(&cp_state, &ring->last_cp_state, sizeof(cp_state));
+
+	ring->last_cp_state = cp_state;
+
+	return progress;
+}
+
 const struct adreno_gpu_funcs a5xx_gpu_funcs = {
 	.base = {
 		.get_param = adreno_get_param,
@@ -1806,6 +1828,7 @@ const struct adreno_gpu_funcs a5xx_gpu_funcs = {
 		.gpu_state_put = a5xx_gpu_state_put,
 		.create_vm = adreno_create_vm,
 		.get_rptr = a5xx_get_rptr,
+		.progress = a5xx_progress,
 	},
 	.init = a5xx_gpu_init,
 	.get_timestamp = a5xx_get_timestamp,
