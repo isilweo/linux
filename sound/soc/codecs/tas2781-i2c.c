@@ -962,10 +962,66 @@ static const struct snd_kcontrol_new tas2781_snd_controls[] = {
 		tas2781_digital_putvol, tas2781_dvc_tlv),
 };
 
+/*
+ * TAS5782M digital volume: register 0x00 is +24 dB, 0x30 is 0 dB, 0xfe is
+ * -103 dB in 0.5 dB steps, and 0xff mutes. Expose 0 (mute) up to 0 dB only:
+ * the gain above 0 dB just clips a full scale signal, and with it a volume
+ * slider spends its top quarter on that. Control value v sets register
+ * 0xfe - v + 1, so 1 is -103 dB and TAS5782M_DVC_MAX is 0 dB.
+ */
+#define TAS5782M_DVC_MAX	207
+#define TAS5782M_DVC_MUTE	0xff
+
+static const DECLARE_TLV_DB_SCALE(tas5782m_dvc_tlv, -10350, 50, 1);
+
+static int tas5782m_getvol(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *codec = snd_kcontrol_chip(kcontrol);
+	struct tasdevice_priv *tas_priv = snd_soc_component_get_drvdata(codec);
+	int ret, val;
+
+	guard(mutex)(&tas_priv->codec_lock);
+	ret = tasdevice_dev_read(tas_priv, 0, TAS5782M_DVC_LEVEL, &val);
+	if (ret)
+		return ret;
+
+	ucontrol->value.integer.value[0] = val == TAS5782M_DVC_MUTE ? 0 :
+		clamp(0xff - val, 1, TAS5782M_DVC_MAX);
+	return 0;
+}
+
+static int tas5782m_putvol(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *codec = snd_kcontrol_chip(kcontrol);
+	struct tasdevice_priv *tas_priv = snd_soc_component_get_drvdata(codec);
+	long v = ucontrol->value.integer.value[0];
+	int i, ret, old, reg, changed = 0;
+
+	if (v < 0 || v > TAS5782M_DVC_MAX)
+		return -EINVAL;
+	reg = v ? 0xff - v : TAS5782M_DVC_MUTE;
+
+	guard(mutex)(&tas_priv->codec_lock);
+	for (i = 0; i < tas_priv->ndev; i++) {
+		ret = tasdevice_dev_read(tas_priv, i, TAS5782M_DVC_LEVEL, &old);
+		if (ret)
+			return ret;
+		if (old == reg)
+			continue;
+		ret = tasdevice_dev_write(tas_priv, i, TAS5782M_DVC_LEVEL, reg);
+		if (ret)
+			return ret;
+		changed = 1;
+	}
+	return changed;
+}
+
 static const struct snd_kcontrol_new tas5782m_snd_controls[] = {
-	SOC_SINGLE_RANGE_EXT_TLV("Speaker Digital Volume", TAS5782M_DVC_LEVEL,
-		0, 0, 254, 1, tas2781_amp_getvol,
-		tas2781_amp_putvol, tas5825_dvc_tlv),
+	SOC_SINGLE_EXT_TLV("Speaker Digital Volume", SND_SOC_NOPM, 0,
+		TAS5782M_DVC_MAX, 0, tas5782m_getvol, tas5782m_putvol,
+		tas5782m_dvc_tlv),
 };
 
 static const struct snd_kcontrol_new tas5825_snd_controls[] = {
