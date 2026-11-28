@@ -248,18 +248,26 @@
 &i2c_1 {
 	status = "okay";
 
-	speaker_amp: tas5782m@49 {
+	speaker_amp: audio-codec@49 {
 		compatible = "ti,tas5782m";
 		reg = <0x49>;
 
-		pdn-gpios = <&tlmm 44 GPIO_ACTIVE_LOW>;
-		/* The next two GPIOs are connected but unused by the driver */
-		mute-gpio = <&tlmm 0 GPIO_ACTIVE_HIGH>;
-		fault-gpio = <&tlmm 45 GPIO_ACTIVE_HIGH>;
+		/*
+		 * GPIO 44 controls PDN#, inverted on the board: the amplifier
+		 * runs while the GPIO is low. The tas2781 driver sets "reset"
+		 * to 1 to run it. MUTE# (GPIO 0) and FAULT# (GPIO 45) are
+		 * connected but not used by the driver.
+		 */
+		reset-gpios = <&tlmm 44 GPIO_ACTIVE_LOW>;
 		pvdd-supply = <&speaker_amp_pvdd>;
 
+		/*
+		 * Calibrated DSP configuration with the speaker excursion and
+		 * thermal limits, converted from the vendor register list.
+		 */
+		firmware-name = "qcom/msm8953/lenovo/cd-18781y/tas5782mRCA1.bin";
+
 		sound-name-prefix = "Speaker Amp";
-		ti,dsp-config-name = "lenovo_cd-18781y";
 		#sound-dai-cells = <0>;
 	};
 };
@@ -371,7 +379,6 @@
 
 	audio-routing =
 		"Speaker", "Speaker Amp OUT",
-		"Speaker Amp DAC IN", "HPH_R",
 		"DMIC1", "MIC BIAS Internal1",
 		"DMIC1", "Digital Mic1",
 		"DMIC2", "MIC BIAS Internal1",
